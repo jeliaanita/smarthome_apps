@@ -1,0 +1,56 @@
+Betul, karena _buildEnergyFlow masih pakai _data (MQTT) bukan _ohItems. Tinggal update nilai di _buildFlowDiagram untuk pakai data dari openHAB:
+Ubah bagian ini di _buildTotalEnergyHeader dan _buildStatsRow juga, tapi yang paling penting adalah di _buildFlowDiagram. Tambahkan getter helper dulu di state, lalu update node values:
+dart
+double get _voltage     => _getItemValue('voltage')  ?? _getItemValue('volt')      ?? _data.volt;
+double get _powerW      => _getItemValue('power')    ?? _data.powerKw * 1000;
+double get _powerKw     => _powerW / 1000;
+double get _ampere      => _getItemValue('current')  ?? _getItemValue('amp')       ?? _data.amp;
+double get _energyToday => _getItemValue('energytod') ?? _getItemValue('today')    ?? _data.energyToday;
+double get _energyTotal => _getItemValue('energytot') ?? _getItemValue('total')    ?? _data.energyTotal;
+double get _energyYest  => _getItemValue('energyyes') ?? _getItemValue('yesterday') ?? _data.energyYesterday;
+double get _frequency   => _getItemValue('freq')     ?? _data.freq;
+double get _pf          => _getItemValue('factor')   ?? _getItemValue('pf')        ?? _data.pf;
+Lalu update semua widget yang pakai _data.xxx menjadi pakai getter di atas:
+_buildTotalEnergyHeader — ubah bagian RichText value:
+darttext: _selectedPeriod == 'Today'
+    ? _energyToday.toStringAsFixed(2)   
+    : _energyTotal.toStringAsFixed(2),  
+_buildStatsRow — ubah 3 nilai:
+dart_buildStatItem('Energy Today',
+    '${_energyToday.toStringAsFixed(2)} kWh', const Color(0xFF34C759), context),
+_buildStatItem('Active Power',
+    '${_powerKw.toStringAsFixed(2)} kW', const Color(0xCCFC0004), context),
+_buildStatItem('Power Factor',
+    '${(_pf * 100).toStringAsFixed(1)} %', const Color(0xFF0088FF), context),
+_buildFlowDiagram — update 4 node values:
+dart.
+value: '${_voltage.toStringAsFixed(1)} V',
+
+value: '${_energyToday.toStringAsFixed(2)} kWh',
+
+value: '${_powerKw.toStringAsFixed(2)} kW',
+
+value: '${_ampere.toStringAsFixed(2)} A',
+_buildEnergySavingCard — update teks:
+dart'Device: ${_data.deviceOnline ? "Online ✓" : "Offline"} · '
+'Freq: ${_frequency.toStringAsFixed(1)} Hz · '
+'Yesterday: ${_energyYest.toStringAsFixed(2)} kWh',
+_buildCapacityCard — hapus variabel lokal yang lama, langsung pakai getter:
+dartfinal fillRatio   = (_energyTotal / maxCapacity).clamp(0.0, 1.0);
+
+// Row 1
+_buildCapacityStat('Voltage', '${_voltage.toStringAsFixed(1)} V', ...),
+_buildCapacityStat('Power',   '${_powerW.toStringAsFixed(1)} W',  ...),
+_buildCapacityStat('Current', '${_ampere.toStringAsFixed(2)} A',  ...),
+
+// Row 2
+_buildCapacityStat('Frequency',  '${_frequency.toStringAsFixed(1)} Hz', ...),
+_buildCapacityStat('Yesterday',  '${_energyYest.toStringAsFixed(2)} kWh', ...),
+Terakhir, pastikan _loadOpenHABItems dipanggil ulang saat MQTT update masuk, tambahkan di listener stream:
+dart_dataSub = mqtt.stream.listen((data) {
+  if (mounted) setState(() {
+    _data = data;
+    _mqttConnected = mqtt.isConnected;
+  });
+  _loadOpenHABItems(); 
+});

@@ -1,0 +1,6 @@
+projectKey=smarthome
+serverUrl=https://sonarqube-busol.padinet.com
+serverVersion=25.8.0.112029
+dashboardUrl=https://sonarqube-busol.padinet.com/dashboard?id=smarthome
+ceTaskId=914c3373-4183-49c7-9439-814f340fdacd
+ceTaskUrl=https://sonarqube-busol.padinet.com/api/ce/task?id=914c3373-4183-49c7-9439-814f340fdacd

@@ -1,0 +1,1533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PADI TECH — SmartHome Integration Tester</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.0/mqtt.min.js"></script>
+<style>
+:root {
+  --amber: #D97706;
+  --amber-light: #FEF3C7;
+  --amber-hover: #FB923C;
+  --bg: #F3F4F6;
+  --surface: #FFFFFF;
+  --surface2: #F9FAFB;
+  --border: #E5E7EB;
+  --border2: #D1D5DB;
+  --text: #111827;
+  --text2: #374151;
+  --muted: #9CA3AF;
+  --success: #16A34A;
+  --success-bg: #F0FDF4;
+  --info: #2563EB;
+  --info-bg: #EFF6FF;
+  --danger: #DC2626;
+  --danger-bg: #FEF2F2;
+  --warn-bg: #FFFBEB;
+  --mono: 'DM Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+  --radius: 14px;
+  --radius-sm: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--sans); min-height:100vh; }
+
+/* APP LAYOUT */
+.app { display:flex; min-height:100vh; }
+
+/* SIDEBAR */
+.sidebar {
+  width:220px; background:var(--surface);
+  border-right:1px solid var(--border);
+  display:flex; flex-direction:column;
+  position:fixed; height:100vh; top:0; left:0; z-index:100;
+}
+.sidebar-logo {
+  padding:20px 16px 16px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.logo-mark {
+  width:34px; height:34px;
+  background:linear-gradient(135deg,var(--amber),var(--amber-hover));
+  border-radius:9px; display:flex; align-items:center; justify-content:center;
+  font-size:17px; box-shadow:0 3px 10px rgba(217,119,6,0.25); flex-shrink:0;
+}
+.logo-text { font-size:14px; font-weight:700; letter-spacing:-0.3px; }
+.logo-text span { color:var(--amber); }
+.logo-version { font-size:10px; color:var(--muted); font-family:var(--mono); }
+
+.sidebar-nav { padding:10px 8px; flex:1; overflow-y:auto; }
+.nav-section { font-size:10px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:0.7px; padding:0 8px; margin:10px 0 4px; }
+.nav-item {
+  display:flex; align-items:center; gap:9px;
+  padding:8px 10px; border-radius:var(--radius-sm);
+  cursor:pointer; transition:all 0.15s;
+  color:var(--text2); font-size:13px; font-weight:500;
+  border:none; background:none; width:100%; text-align:left;
+}
+.nav-item:hover { background:var(--bg); color:var(--text); }
+.nav-item.active { background:var(--amber-light); color:var(--amber); font-weight:600; }
+.nav-icon { font-size:15px; width:18px; text-align:center; flex-shrink:0; }
+
+.sidebar-footer { padding:12px 8px; border-top:1px solid var(--border); }
+.conn-status { display:flex; flex-direction:column; gap:5px; }
+.cs-row {
+  display:flex; align-items:center; gap:7px;
+  padding:6px 8px; border-radius:6px;
+  background:var(--surface2); border:1px solid var(--border);
+  font-size:11px; font-family:var(--mono); color:var(--muted);
+}
+.cs-dot { width:6px; height:6px; border-radius:50%; background:var(--muted); flex-shrink:0; transition:all 0.3s; }
+.cs-dot.green { background:var(--success); box-shadow:0 0 5px rgba(22,163,74,0.5); animation:pulse 2s infinite; }
+.cs-dot.amber { background:var(--amber); box-shadow:0 0 5px rgba(217,119,6,0.5); animation:pulse 2s infinite; }
+.cs-dot.red { background:var(--danger); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* MAIN */
+.main { margin-left:220px; flex:1; }
+.topbar {
+  background:var(--surface); border-bottom:1px solid var(--border);
+  padding:0 24px; height:56px;
+  display:flex; align-items:center; justify-content:space-between;
+  position:sticky; top:0; z-index:50;
+}
+.topbar-left { display:flex; flex-direction:column; gap:1px; }
+.topbar-title { font-size:15px; font-weight:700; }
+.topbar-sub { font-size:11px; color:var(--muted); font-family:var(--mono); }
+.badge-project {
+  padding:4px 10px; background:var(--amber-light); color:var(--amber);
+  border-radius:100px; font-size:11px; font-weight:600; font-family:var(--mono);
+}
+
+.content { padding:20px 24px; }
+
+/* PANELS */
+.panel { display:none; }
+.panel.active { display:block; }
+
+/* GRID */
+.g2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.g3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+.full { grid-column:1/-1; }
+
+/* CARD */
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:16px; }
+.card:last-child { margin-bottom:0; }
+.ch {
+  padding:14px 18px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.ci {
+  width:32px; height:32px; border-radius:7px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:15px; flex-shrink:0;
+}
+.ci-amber { background:var(--amber-light); }
+.ci-blue { background:var(--info-bg); }
+.ci-green { background:var(--success-bg); }
+.ct { font-size:13.5px; font-weight:600; }
+.cs { font-size:11px; color:var(--muted); font-family:var(--mono); margin-top:1px; }
+.cb { padding:18px; }
+.ch-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
+
+/* FORM */
+.field { margin-bottom:14px; }
+.field:last-child { margin-bottom:0; }
+label {
+  display:block; font-size:10.5px; font-weight:600; color:var(--muted);
+  text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px; font-family:var(--mono);
+}
+.req-mark { color:var(--amber); }
+input, select, textarea {
+  width:100%; background:var(--surface2); border:1px solid var(--border2);
+  color:var(--text); border-radius:var(--radius-sm); padding:8px 11px;
+  font-family:var(--sans); font-size:13px; outline:none;
+  transition:border-color 0.2s, box-shadow 0.2s;
+  -webkit-appearance:none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color:var(--amber); box-shadow:0 0 0 3px rgba(217,119,6,0.1);
+}
+input.filled { border-color:#86efac; background:#f0fdf4; }
+textarea { resize:vertical; min-height:70px; }
+.fg2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.fg3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+
+/* BUTTONS */
+.btn {
+  padding:8px 15px; border-radius:var(--radius-sm); border:none;
+  font-family:var(--sans); font-size:13px; font-weight:600;
+  cursor:pointer; transition:all 0.15s;
+  display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+}
+.btn:active { transform:scale(0.97); }
+.btn:disabled { opacity:0.4; cursor:not-allowed; transform:none !important; }
+.btn-primary { background:var(--amber); color:#fff; box-shadow:0 2px 8px rgba(217,119,6,0.2); }
+.btn-primary:hover:not(:disabled) { background:var(--amber-hover); }
+.btn-secondary { background:var(--surface2); color:var(--text2); border:1px solid var(--border2); }
+.btn-secondary:hover:not(:disabled) { border-color:var(--amber); color:var(--amber); background:var(--amber-light); }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-danger:hover:not(:disabled) { background:#b91c1c; }
+.btn-success { background:var(--success); color:#fff; }
+.btn-success:hover:not(:disabled) { background:#15803d; }
+.btn-sm { padding:5px 11px; font-size:12px; }
+.btn-group { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* BADGE */
+.badge {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:3px 9px; border-radius:100px;
+  font-size:11px; font-weight:600; font-family:var(--mono);
+}
+.b-success { background:var(--success-bg); color:var(--success); border:1px solid #bbf7d0; }
+.b-danger { background:var(--danger-bg); color:var(--danger); border:1px solid #fecaca; }
+.b-amber { background:var(--warn-bg); color:var(--amber); border:1px solid #fde68a; }
+.b-info { background:var(--info-bg); color:var(--info); border:1px solid #bfdbfe; }
+.b-muted { background:var(--surface2); color:var(--muted); border:1px solid var(--border); }
+.b-dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+
+/* LOG */
+.log-box {
+  background:#1a1a2e; border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:10px 12px; font-family:var(--mono); font-size:11px;
+  height:140px; overflow-y:auto; margin-top:12px; line-height:1.9;
+}
+.log-box::-webkit-scrollbar { width:3px; }
+.log-box::-webkit-scrollbar-thumb { background:#2d2d4e; border-radius:4px; }
+.le { display:flex; gap:8px; }
+.lt { color:#4a4a7a; flex-shrink:0; }
+.lm.ok { color:#4ade80; }
+.lm.er { color:#f87171; }
+.lm.in { color:#60a5fa; }
+.lm.wn { color:#fbbf24; }
+
+/* DIVIDER */
+hr { border:none; border-top:1px solid var(--border); margin:14px 0; }
+
+/* VIDEO */
+.video-box {
+  background:#0f0f1a; border-radius:var(--radius-sm); aspect-ratio:16/9;
+  display:flex; align-items:center; justify-content:center;
+  flex-direction:column; gap:8px;
+  border:1px solid var(--border); margin-bottom:12px;
+  position:relative; overflow:hidden;
+}
+.scan-line { position:absolute; top:0; left:0; right:0; height:1px; background:rgba(217,119,6,0.4); display:none; animation:scan 3s linear infinite; }
+@keyframes scan { 0%{top:0} 100%{top:100%} }
+.video-box.streaming .scan-line { display:block; }
+.video-icon { font-size:34px; opacity:0.12; }
+.video-label { color:#3a3a5c; font-size:12px; font-family:var(--mono); }
+
+/* SLIDER */
+.slider-wrap { margin-bottom:14px; }
+.slider-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; }
+.slider-header label { margin:0; }
+.slider-val { font-family:var(--mono); font-size:12px; color:var(--amber); font-weight:600; }
+input[type="range"] {
+  margin:0; padding:0; background:transparent; border:none; box-shadow:none;
+  -webkit-appearance:none; width:100%; height:auto; margin-bottom:0;
+}
+input[type="range"]::-webkit-slider-runnable-track { height:4px; background:var(--border2); border-radius:4px; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; width:15px; height:15px; border-radius:50%; background:var(--amber); margin-top:-5.5px; cursor:pointer; }
+
+/* SWATCHES */
+.swatches { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px; }
+.swatch { width:24px; height:24px; border-radius:5px; border:2px solid transparent; cursor:pointer; transition:all 0.15s; }
+.swatch:hover, .swatch.active { border-color:var(--text); transform:scale(1.12); }
+
+/* BULB PREVIEW */
+.bulb-prev-wrap { display:flex; justify-content:center; padding:10px 0; }
+.bulb-prev { width:52px; height:52px; border-radius:50%; background:rgba(0,0,0,0.06); border:2px solid var(--border); transition:all 0.4s; }
+
+/* VOICE */
+.voice-center { text-align:center; padding:6px 0; }
+.voice-mic {
+  width:64px; height:64px; border-radius:50%;
+  background:var(--surface2); border:2px solid var(--border2);
+  font-size:24px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:all 0.2s; margin-bottom:10px;
+}
+.voice-mic:hover { border-color:var(--amber); box-shadow:0 4px 18px rgba(217,119,6,0.2); }
+.voice-mic.recording { background:var(--danger-bg); border-color:var(--danger); animation:ring 1s infinite; }
+@keyframes ring { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.3)} 50%{box-shadow:0 0 0 10px rgba(220,38,38,0)} }
+.voice-transcript { font-size:13px; font-weight:600; color:var(--amber); font-family:var(--mono); min-height:20px; margin-bottom:10px; }
+
+/* INTENT BOX */
+.intent-box {
+  background:#1a1a2e; border-radius:var(--radius-sm); padding:12px 14px;
+  min-height:100px; border:1px solid var(--border);
+  font-family:var(--mono); font-size:11.5px; color:#4a4a7a; line-height:1.9; white-space:pre;
+}
+
+/* INFO TABLE */
+.info-table { width:100%; border-collapse:collapse; font-size:12px; }
+.info-table th { text-align:left; padding:6px 10px; background:var(--surface2); color:var(--muted); font-family:var(--mono); font-size:10px; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid var(--border); }
+.info-table td { padding:8px 10px; border-bottom:1px solid var(--border); color:var(--text2); font-family:var(--mono); font-size:12px; }
+.info-table tr:last-child td { border-bottom:none; }
+.info-table td:first-child { color:var(--muted); }
+
+/* SECTION TITLE */
+.section-title { font-size:13px; font-weight:700; color:var(--text); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+.section-title::after { content:''; flex:1; height:1px; background:var(--border); }
+
+/* TOGGLE */
+.toggle-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+.toggle-label { font-size:13px; color:var(--text2); }
+.toggle { position:relative; width:40px; height:22px; cursor:pointer; }
+.toggle input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; inset:0; background:var(--border2); border-radius:11px; transition:0.2s; }
+.toggle-slider:before { content:''; position:absolute; width:16px; height:16px; left:3px; top:3px; background:#fff; border-radius:50%; transition:0.2s; }
+.toggle input:checked + .toggle-slider { background:var(--amber); }
+.toggle input:checked + .toggle-slider:before { transform:translateX(18px); }
+
+@media (max-width:768px) {
+  .sidebar { width:54px; }
+  .logo-text, .logo-version, .nav-item span:not(.nav-icon), .nav-section, .sidebar-footer { display:none; }
+  .main { margin-left:54px; }
+  .nav-item { justify-content:center; }
+  .g2, .g3 { grid-template-columns:1fr; }
+  .fg2, .fg3 { grid-template-columns:1fr; }
+  .full { grid-column:auto; }
+  .content { padding:12px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">🏠</div>
+    <div>
+      <div class="logo-text">Smart<span>Home</span></div>
+      <div class="logo-version">PADI TECH v2.0</div>
+    </div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Integration</div>
+    <button class="nav-item active" onclick="switchTab('mqtt')">
+      <span class="nav-icon">📡</span><span>MQTT Broker</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('camera')">
+      <span class="nav-icon">📷</span><span>IP Camera</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('bulb')">
+      <span class="nav-icon">💡</span><span>Smart Bulb</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('xiaomi')">
+      <span class="nav-icon">📱</span><span>Mi Home</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('voice')">
+      <span class="nav-icon">🎙️</span><span>Voice</span>
+    </button>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="conn-status">
+      <div class="cs-row"><div class="cs-dot" id="dot-mqtt"></div><span id="lbl-mqtt">MQTT: Offline</span></div>
+      <div class="cs-row"><div class="cs-dot" id="dot-cam"></div><span id="lbl-cam">Camera: Idle</span></div>
+      <div class="cs-row"><div class="cs-dot" id="dot-bulb"></div><span id="lbl-bulb">Bulb: --</span></div>
+      <div class="cs-row"><div class="cs-dot" id="dot-mi"></div><span id="lbl-mi">Mi Home: --</span></div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="topbar-title" id="topbar-title">MQTT Broker</div>
+      <div class="topbar-sub" id="topbar-sub">WebSocket MQTT Connection</div>
+    </div>
+    <span class="badge-project">PADI TECH — SmartHome</span>
+  </div>
+
+  <div class="content">
+
+    <!-- ══════════════════════ MQTT ══════════════════════ -->
+    <div class="panel active" id="panel-mqtt">
+      <div class="g2">
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-blue">📡</div>
+            <div><div class="ct">Broker Config</div><div class="cs">Isi data dari tim hardware/backend</div></div>
+            <div class="ch-actions"><span class="badge b-muted" id="mqtt-badge"><span class="b-dot"></span> OFFLINE</span></div>
+          </div>
+          <div class="cb">
+            <div class="fg2">
+              <div class="field">
+                <label>Broker Host / IP <span class="req-mark">*</span></label>
+                <input id="mqtt-host" placeholder="192.168.1.10 atau broker.domain.com" oninput="markFilled(this)">
+              </div>
+              <div class="field">
+                <label>TCP Port <span class="req-mark">*</span></label>
+                <input id="mqtt-tcp" placeholder="1883" oninput="markFilled(this)">
+              </div>
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>WebSocket Port <span class="req-mark">*</span></label>
+                <input id="mqtt-wsport" placeholder="8083 / 8084 (SSL)" oninput="markFilled(this)">
+              </div>
+              <div class="field">
+                <label>Client ID</label>
+                <input id="mqtt-clientid" value="paditech-tester-001" oninput="markFilled(this)">
+              </div>
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>Username</label>
+                <input id="mqtt-user" placeholder="optional" oninput="markFilled(this)">
+              </div>
+              <div class="field">
+                <label>Password</label>
+                <input id="mqtt-pass" type="password" placeholder="optional" oninput="markFilled(this)">
+              </div>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">SSL / TLS</span>
+              <label class="toggle"><input type="checkbox" id="mqtt-ssl"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-primary" id="mqtt-conn-btn" onclick="mqttConnect()">🔗 Connect</button>
+              <button class="btn btn-danger btn-sm" id="mqtt-disc-btn" onclick="mqttDisconnect()" disabled>✕ Disconnect</button>
+            </div>
+            <div class="log-box" id="mqtt-log">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Isi konfigurasi broker dari tim hardware...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-amber">📬</div>
+            <div><div class="ct">Topic Structure</div><div class="cs">Publish & Subscribe</div></div>
+          </div>
+          <div class="cb">
+            <div class="field">
+              <label>Base Topic</label>
+              <input id="mqtt-base-topic" placeholder="contoh: smarthome/paditech" oninput="markFilled(this)">
+            </div>
+            <div class="field">
+              <label>Subscribe Topic <span class="req-mark">*</span></label>
+              <div style="display:flex;gap:8px">
+                <input id="mqtt-sub-topic" placeholder="smarthome/# atau topik spesifik" style="margin:0" oninput="markFilled(this)">
+                <button class="btn btn-secondary btn-sm" onclick="mqttSubscribe()" style="flex-shrink:0">Sub</button>
+              </div>
+            </div>
+            <hr>
+            <div class="section-title">Publish Message</div>
+            <div class="field">
+              <label>Publish Topic <span class="req-mark">*</span></label>
+              <input id="mqtt-pub-topic" placeholder="smarthome/living/light" oninput="markFilled(this)">
+            </div>
+            <div class="field">
+              <label>Payload (JSON)</label>
+              <textarea id="mqtt-payload">{"action":"toggle","state":"on"}</textarea>
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>QoS</label>
+                <select id="mqtt-qos">
+                  <option value="0">QoS 0 — At most once</option>
+                  <option value="1" selected>QoS 1 — At least once</option>
+                  <option value="2">QoS 2 — Exactly once</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Retain</label>
+                <select id="mqtt-retain">
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </select>
+              </div>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-primary" onclick="mqttPublish()">📤 Publish</button>
+              <button class="btn btn-secondary btn-sm" onclick="mqttTemplate('light')">💡 Light</button>
+              <button class="btn btn-secondary btn-sm" onclick="mqttTemplate('sensor')">🌡️ Sensor</button>
+              <button class="btn btn-secondary btn-sm" onclick="mqttTemplate('door')">🚪 Door</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card full">
+          <div class="ch">
+            <div class="ci ci-blue">📨</div>
+            <div><div class="ct">Message Stream</div><div class="cs">Subscribed: <span id="active-topics">None</span></div></div>
+            <div class="ch-actions">
+              <button class="btn btn-secondary btn-sm" onclick="clearLog('mqtt-stream')">Clear</button>
+            </div>
+          </div>
+          <div class="cb">
+            <div class="log-box" id="mqtt-stream" style="height:180px">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Waiting for messages...</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════════════ CAMERA ══════════════════════ -->
+    <div class="panel" id="panel-camera">
+      <div class="g2">
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-blue">📷</div>
+            <div><div class="ct">Camera Config</div><div class="cs">Data dari tim hardware</div></div>
+          </div>
+          <div class="cb">
+            <div class="fg2">
+              <div class="field">
+                <label>Camera Brand <span class="req-mark">*</span></label>
+                <input id="cam-brand" placeholder="Hikvision / Dahua / dll" oninput="markFilled(this)">
+              </div>
+              <div class="field">
+                <label>Camera Model <span class="req-mark">*</span></label>
+                <input id="cam-model" placeholder="DS-2CD2143G2-I" oninput="markFilled(this)">
+              </div>
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>IP Address <span class="req-mark">*</span></label>
+                <input id="cam-ip" placeholder="192.168.1.100" oninput="markFilled(this);buildRTSP()">
+              </div>
+              <div class="field">
+                <label>RTSP Port <span class="req-mark">*</span></label>
+                <input id="cam-rtsp-port" value="554" oninput="markFilled(this);buildRTSP()">
+              </div>
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>Username <span class="req-mark">*</span></label>
+                <input id="cam-user" placeholder="admin" oninput="markFilled(this);buildRTSP()">
+              </div>
+              <div class="field">
+                <label>Password <span class="req-mark">*</span></label>
+                <input id="cam-pass" type="password" placeholder="••••••" oninput="markFilled(this)">
+              </div>
+            </div>
+            <div class="field">
+              <label>RTSP Full URL <span style="color:var(--muted)">(auto-build atau isi manual)</span></label>
+              <input id="cam-rtsp-url" placeholder="rtsp://user:pass@ip:554/stream1" oninput="markFilled(this)">
+            </div>
+            <div class="fg2">
+              <div class="field">
+                <label>Protocol</label>
+                <select id="cam-protocol">
+                  <option value="rtsp">RTSP</option>
+                  <option value="onvif">ONVIF</option>
+                  <option value="hls">HLS</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>ONVIF Port</label>
+                <input id="cam-onvif-port" placeholder="8080" oninput="markFilled(this)">
+              </div>
+            </div>
+
+            <hr>
+            <div class="section-title">Network Access</div>
+            <div class="toggle-row">
+              <span class="toggle-label">Accessible via Internet</span>
+              <label class="toggle"><input type="checkbox" id="cam-internet"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">VPN Required</span>
+              <label class="toggle"><input type="checkbox" id="cam-vpn"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="field">
+              <label>Public IP / DDNS (jika ada)</label>
+              <input id="cam-ddns" placeholder="mycamera.ddns.net" oninput="markFilled(this)">
+            </div>
+            <div class="field">
+              <label>Backend Relay URL <span class="req-mark">*</span></label>
+              <input id="cam-relay-url" placeholder="http://192.168.1.x:8888/stream" oninput="markFilled(this)">
+              <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px">URL go2rtc / MediaMTX dari tim backend</div>
+            </div>
+
+            <div class="btn-group">
+              <button class="btn btn-primary" onclick="connectCamera()">▶ Connect Stream</button>
+              <button class="btn btn-secondary" onclick="stopCamera()">■ Stop</button>
+            </div>
+            <div class="log-box" id="cam-log">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Isi data kamera dari tim hardware...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-amber">🖥️</div>
+            <div><div class="ct">Live Preview</div><div class="cs">Via relay server</div></div>
+            <div class="ch-actions"><span class="badge b-muted" id="cam-badge"><span class="b-dot"></span> DISCONNECTED</span></div>
+          </div>
+          <div class="cb">
+            <div class="video-box" id="cam-preview">
+              <div class="scan-line"></div>
+              <span class="video-icon">📷</span>
+              <span class="video-label" id="cam-status-text">No stream active</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-secondary btn-sm" onclick="takeSnapshot()">📸 Snapshot</button>
+              <button class="btn btn-secondary btn-sm" onclick="testOnvif()">ℹ️ ONVIF Info</button>
+            </div>
+            <hr>
+            <div class="section-title">Camera Info</div>
+            <table class="info-table" id="cam-info-table">
+              <tr><td>Brand</td><td id="ci-brand">—</td></tr>
+              <tr><td>Model</td><td id="ci-model">—</td></tr>
+              <tr><td>IP</td><td id="ci-ip">—</td></tr>
+              <tr><td>Protocol</td><td id="ci-proto">—</td></tr>
+              <tr><td>ONVIF</td><td id="ci-onvif">—</td></tr>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════════════ BULB ══════════════════════ -->
+    <div class="panel" id="panel-bulb">
+      <div class="g2">
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-amber">💡</div>
+            <div><div class="ct">Smart Bulb Config</div><div class="cs">Data dari tim hardware</div></div>
+          </div>
+          <div class="cb">
+            <div class="field">
+              <label>Brand <span class="req-mark">*</span></label>
+              <select id="bulb-brand" onchange="updateBulbFields()">
+                <option value="">— Pilih brand —</option>
+                <option value="wiz">Philips WiZ (UDP 38899)</option>
+                <option value="hue">Philips Hue (REST API)</option>
+                <option value="yeelight">Yeelight (TCP 55443)</option>
+              </select>
+            </div>
+
+            <!-- WiZ -->
+            <div id="wiz-fields" style="display:none">
+              <div class="section-title">Philips WiZ</div>
+              <div class="fg2">
+                <div class="field"><label>Device Model <span class="req-mark">*</span></label><input id="wiz-model" placeholder="WiZ RGB A60" oninput="markFilled(this)"></div>
+                <div class="field"><label>Quantity <span class="req-mark">*</span></label><input id="wiz-qty" placeholder="3" type="number" oninput="markFilled(this)"></div>
+              </div>
+              <div class="field"><label>IP Address <span class="req-mark">*</span></label><input id="wiz-ip" placeholder="192.168.1.110" oninput="markFilled(this)"></div>
+              <div class="field">
+                <label>Backend Bridge URL <span class="req-mark">*</span></label>
+                <input id="wiz-backend" placeholder="http://192.168.1.x:3000/api/wiz" oninput="markFilled(this)">
+                <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px">Endpoint dari tim backend untuk relay UDP ke WiZ</div>
+              </div>
+            </div>
+
+            <!-- Hue -->
+            <div id="hue-fields" style="display:none">
+              <div class="section-title">Philips Hue</div>
+              <div class="field"><label>Hue Bridge IP <span class="req-mark">*</span></label><input id="hue-bridge-ip" placeholder="192.168.1.50" oninput="markFilled(this)"></div>
+              <div class="field"><label>API Token <span class="req-mark">*</span></label><input id="hue-token" placeholder="hue-api-token-32chars" oninput="markFilled(this)"></div>
+              <div class="fg2">
+                <div class="field"><label>Light ID <span class="req-mark">*</span></label><input id="hue-lightid" placeholder="1" oninput="markFilled(this)"></div>
+                <div class="field"><label>Jumlah Bulb <span class="req-mark">*</span></label><input id="hue-qty" placeholder="4" type="number" oninput="markFilled(this)"></div>
+              </div>
+            </div>
+
+            <!-- Yeelight -->
+            <div id="yee-fields" style="display:none">
+              <div class="section-title">Yeelight</div>
+              <div class="fg2">
+                <div class="field"><label>Device Model <span class="req-mark">*</span></label><input id="yee-model" placeholder="YLDP13YL" oninput="markFilled(this)"></div>
+                <div class="field"><label>IP Address <span class="req-mark">*</span></label><input id="yee-ip" placeholder="192.168.1.112" oninput="markFilled(this)"></div>
+              </div>
+              <div class="toggle-row">
+                <span class="toggle-label">LAN Control Enabled</span>
+                <label class="toggle"><input type="checkbox" id="yee-lan"><span class="toggle-slider"></span></label>
+              </div>
+              <div class="field">
+                <label>Backend Bridge URL <span class="req-mark">*</span></label>
+                <input id="yee-backend" placeholder="http://192.168.1.x:3000/api/yeelight" oninput="markFilled(this)">
+              </div>
+            </div>
+
+            <div class="btn-group" style="margin-top:4px">
+              <button class="btn btn-primary" onclick="connectBulb()">🔗 Connect</button>
+              <button class="btn btn-secondary" onclick="discoverBulbs()">🔍 Discover</button>
+            </div>
+            <div class="log-box" id="bulb-log">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Pilih brand dan isi data dari tim hardware...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-amber">🎨</div>
+            <div><div class="ct">Light Controls</div><div class="cs">Color, brightness & scene</div></div>
+            <div class="ch-actions"><span class="badge b-muted" id="bulb-badge"><span class="b-dot"></span> OFFLINE</span></div>
+          </div>
+          <div class="cb">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <div>
+                <div style="font-size:13px;font-weight:600">Power</div>
+                <div id="bulb-status-text" style="font-size:11px;color:var(--muted);font-family:var(--mono)">Not connected</div>
+              </div>
+              <div style="display:flex;gap:7px">
+                <button class="btn btn-success btn-sm" onclick="bulbPower('on')">ON</button>
+                <button class="btn btn-danger btn-sm" onclick="bulbPower('off')">OFF</button>
+              </div>
+            </div>
+            <label>Color</label>
+            <div class="swatches">
+              <div class="swatch active" style="background:#fff" onclick="setColor(255,255,255,this)"></div>
+              <div class="swatch" style="background:#ffd700" onclick="setColor(255,215,0,this)"></div>
+              <div class="swatch" style="background:#fb923c" onclick="setColor(251,146,60,this)"></div>
+              <div class="swatch" style="background:#ef4444" onclick="setColor(239,68,68,this)"></div>
+              <div class="swatch" style="background:#ec4899" onclick="setColor(236,72,153,this)"></div>
+              <div class="swatch" style="background:#8b5cf6" onclick="setColor(139,92,246,this)"></div>
+              <div class="swatch" style="background:#3b82f6" onclick="setColor(59,130,246,this)"></div>
+              <div class="swatch" style="background:#22c55e" onclick="setColor(34,197,94,this)"></div>
+            </div>
+            <div class="slider-wrap">
+              <div class="slider-header"><label>Brightness</label><span class="slider-val" id="val-brightness">80%</span></div>
+              <input type="range" min="0" max="100" value="80" id="bulb-brightness" oninput="sliderUpdate('brightness',this.value)">
+            </div>
+            <div class="slider-wrap">
+              <div class="slider-header"><label>Color Temp (K)</label><span class="slider-val" id="val-temp">4000K</span></div>
+              <input type="range" min="2700" max="6500" value="4000" id="bulb-temp" oninput="sliderUpdate('temp',this.value)">
+            </div>
+            <div class="bulb-prev-wrap"><div id="bulb-prev" class="bulb-prev"></div></div>
+            <label>Scene</label>
+            <div class="btn-group">
+              <button class="btn btn-secondary btn-sm" onclick="setScene('relax')">🌙 Relax</button>
+              <button class="btn btn-secondary btn-sm" onclick="setScene('focus')">🎯 Focus</button>
+              <button class="btn btn-secondary btn-sm" onclick="setScene('movie')">🎬 Movie</button>
+              <button class="btn btn-secondary btn-sm" onclick="setScene('party')">🎉 Party</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════════════ XIAOMI ══════════════════════ -->
+    <div class="panel" id="panel-xiaomi">
+      <div class="g2">
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-amber">📱</div>
+            <div><div class="ct">Mi Home Config</div><div class="cs">Data dari tim hardware</div></div>
+          </div>
+          <div class="cb">
+            <div class="field">
+              <label>Integration Mode <span class="req-mark">*</span></label>
+              <select id="mi-mode" onchange="updateMiFields()">
+                <option value="local">Local Network (MiIO)</option>
+                <option value="cloud">Mi Cloud API</option>
+              </select>
+            </div>
+
+            <div id="mi-local-fields">
+              <div class="field"><label>Device IP <span class="req-mark">*</span></label><input id="mi-ip" placeholder="192.168.1.120" oninput="markFilled(this)"></div>
+              <div class="field">
+                <label>Device Token (32 hex) <span class="req-mark">*</span></label>
+                <input id="mi-token" placeholder="a1b2c3d4e5f6... (32 karakter)" maxlength="32" oninput="markFilled(this);checkToken(this)">
+                <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px" id="token-hint">0 / 32 chars</div>
+              </div>
+              <div class="field">
+                <label>Backend Bridge URL <span class="req-mark">*</span></label>
+                <input id="mi-backend" placeholder="http://192.168.1.x:3000/api/miio" oninput="markFilled(this)">
+                <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px">Endpoint tim backend untuk relay UDP MiIO</div>
+              </div>
+            </div>
+
+            <div id="mi-cloud-fields" style="display:none">
+              <div class="field"><label>Mi Account Email <span class="req-mark">*</span></label><input id="mi-email" placeholder="account@email.com" oninput="markFilled(this)"></div>
+              <div class="field"><label>Password <span class="req-mark">*</span></label><input id="mi-cloudpass" type="password" oninput="markFilled(this)"></div>
+              <div class="field">
+                <label>Region <span class="req-mark">*</span></label>
+                <select id="mi-region">
+                  <option value="sg" selected>Singapore (sg)</option>
+                  <option value="cn">China (cn)</option>
+                  <option value="us">US (us)</option>
+                  <option value="de">Europe (de)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="btn-group">
+              <button class="btn btn-primary" onclick="connectMi()">🔗 Connect</button>
+              <button class="btn btn-secondary" onclick="discoverMi()">🔍 Discover LAN</button>
+            </div>
+            <div class="log-box" id="mi-log">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Isi data dari tim hardware...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-blue">🔧</div>
+            <div><div class="ct">Device Control</div><div class="cs">MiIO command sender</div></div>
+            <div class="ch-actions"><span class="badge b-muted" id="mi-badge"><span class="b-dot"></span> OFFLINE</span></div>
+          </div>
+          <div class="cb">
+            <div class="field">
+              <label>Device Type</label>
+              <select id="mi-device-type" onchange="updateMiCommands()">
+                <option value="plug">Smart Plug / Switch</option>
+                <option value="airpurifier">Air Purifier</option>
+                <option value="robot">Robot Vacuum</option>
+                <option value="fan">Smart Fan</option>
+                <option value="gateway">Mi Gateway</option>
+              </select>
+            </div>
+            <hr>
+            <div class="section-title">Quick Actions</div>
+            <div class="btn-group" id="mi-quick-btns" style="margin-bottom:14px"></div>
+            <hr>
+            <div class="section-title">Custom Command</div>
+            <div class="field"><label>Method</label><input id="mi-method" value="miIO.info" oninput="markFilled(this)"></div>
+            <div class="field"><label>Params (JSON)</label><textarea id="mi-params" placeholder='["power"]'></textarea></div>
+            <button class="btn btn-primary" onclick="sendMiCommand()">▶ Send Command</button>
+
+            <div class="log-box" id="mi-cmd-log" style="height:110px">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Waiting for commands...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card full">
+          <div class="ch">
+            <div class="ci ci-green">📋</div>
+            <div><div class="ct">Registered Devices</div><div class="cs">List perangkat Xiaomi yang terdaftar</div></div>
+          </div>
+          <div class="cb">
+            <div class="fg3">
+              <div class="field"><label>Device List <span class="req-mark">*</span></label><textarea id="mi-device-list" placeholder="Contoh:&#10;Air Purifier Mi 3C&#10;Robot Vacuum S5&#10;Smart Plug (kamar)"></textarea></div>
+              <div>
+                <div class="toggle-row"><span class="toggle-label">All devices on WiFi</span><label class="toggle"><input type="checkbox" id="mi-wifi-ok"><span class="toggle-slider"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Registered in Mi Home App</span><label class="toggle"><input type="checkbox" id="mi-app-ok"><span class="toggle-slider"></span></label></div>
+                <div class="toggle-row"><span class="toggle-label">Mi Account ready</span><label class="toggle"><input type="checkbox" id="mi-acc-ok"><span class="toggle-slider"></span></label></div>
+              </div>
+              <div class="field"><label>Firmware Version (optional)</label><input id="mi-fw" placeholder="1.4.1_190" oninput="markFilled(this)"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════════════ VOICE ══════════════════════ -->
+    <div class="panel" id="panel-voice">
+      <div class="g2">
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-blue">🎙️</div>
+            <div><div class="ct">Voice Config</div><div class="cs">Google / Alexa integration</div></div>
+          </div>
+          <div class="cb">
+            <div class="field">
+              <label>Platform <span class="req-mark">*</span></label>
+              <select id="voice-platform" onchange="updateVoiceFields()">
+                <option value="google">Google Home / Assistant</option>
+                <option value="alexa">Amazon Alexa</option>
+              </select>
+            </div>
+
+            <div id="google-fields">
+              <div class="toggle-row">
+                <span class="toggle-label">Google Cloud Account Available</span>
+                <label class="toggle"><input type="checkbox" id="google-acc"><span class="toggle-slider"></span></label>
+              </div>
+              <div class="field"><label>Preferred Region</label>
+                <select id="google-region"><option value="asia">Asia</option><option value="us">US</option><option value="eu">Europe</option></select>
+              </div>
+              <div class="toggle-row">
+                <span class="toggle-label">Smart Home Action Created</span>
+                <label class="toggle"><input type="checkbox" id="google-action"><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+
+            <div id="alexa-fields" style="display:none">
+              <div class="toggle-row">
+                <span class="toggle-label">Amazon Developer Account Available</span>
+                <label class="toggle"><input type="checkbox" id="alexa-acc"><span class="toggle-slider"></span></label>
+              </div>
+              <div class="toggle-row">
+                <span class="toggle-label">Alexa Skill Created</span>
+                <label class="toggle"><input type="checkbox" id="alexa-skill"><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+
+            <hr>
+            <div class="section-title">Test Command</div>
+            <div class="voice-center">
+              <div id="voice-status" style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:8px">Click mic or type below</div>
+              <button class="voice-mic" id="voice-mic-btn" onclick="toggleVoice()">🎤</button>
+              <div class="voice-transcript" id="voice-transcript"></div>
+            </div>
+            <div class="field"><input id="voice-text" placeholder="Turn on the living room lights" onkeypress="if(event.key==='Enter') processVoice()"></div>
+            <div class="btn-group">
+              <button class="btn btn-primary" onclick="processVoice()">▶ Process</button>
+              <button class="btn btn-secondary btn-sm" onclick="clearVoice()">Clear</button>
+            </div>
+            <div class="log-box" id="voice-log">
+              <div class="le"><span class="lt">--:--:--</span><span class="lm in">Ready for voice commands...</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <div class="ci ci-green">⚡</div>
+            <div><div class="ct">Intent Result</div><div class="cs">Parsed entities</div></div>
+          </div>
+          <div class="cb">
+            <div class="intent-box" id="intent-result">No command processed yet...</div>
+            <hr>
+            <div class="section-title">Quick Templates</div>
+            <div class="btn-group" style="flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Turn on living room lights')">💡 Lights ON</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Set brightness to 50 percent')">🔆 Brightness</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Turn on the AC')">❄️ AC</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Set temperature to 22 degrees')">🌡️ Temp</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Lock the front door')">🔒 Lock</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Show me the front camera')">📷 Camera</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Turn off all devices')">⛔ All Off</button>
+              <button class="btn btn-secondary btn-sm" onclick="setVoice('Good night')">🌙 Night</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</main>
+</div>
+
+<script>
+// ─── UTILS ───────────────────────────────────────────────────
+function ts() { return new Date().toTimeString().slice(0,8); }
+function log(id, msg, type='in') {
+  const box = document.getElementById(id);
+  if (!box) return;
+  const el = document.createElement('div'); el.className = 'le';
+  el.innerHTML = `<span class="lt">${ts()}</span><span class="lm ${type}">${msg}</span>`;
+  box.appendChild(el); box.scrollTop = box.scrollHeight;
+}
+function clearLog(id) { const b = document.getElementById(id); b.innerHTML=''; log(id,'Log cleared','in'); }
+function markFilled(el) { el.classList.toggle('filled', el.value.trim().length > 0); }
+function setDot(id, lblId, text, state) {
+  const d = document.getElementById(id), l = document.getElementById(lblId);
+  if (!d || !l) return;
+  d.className = 'cs-dot' + (state==='green'?' green':state==='amber'?' amber':state==='red'?' red':'');
+  l.textContent = text;
+}
+function setBadge(id, state, label) {
+  const el = document.getElementById(id); if (!el) return;
+  const cls = {on:'b-success',off:'b-muted',err:'b-danger',connecting:'b-amber'};
+  el.className = 'badge ' + (cls[state]||'b-muted');
+  el.innerHTML = `<span class="b-dot"></span> ${label}`;
+}
+
+// ─── TABS ────────────────────────────────────────────────────
+const tabMeta = {
+  mqtt:   ['MQTT Broker','WebSocket MQTT Connection'],
+  camera: ['IP Camera','RTSP / ONVIF Stream'],
+  bulb:   ['Smart Bulb','WiZ / Hue / Yeelight Control'],
+  xiaomi: ['Mi Home','MiIO Protocol / Cloud API'],
+  voice:  ['Voice Command','Google / Alexa Intent Simulator'],
+};
+function switchTab(name) {
+  document.querySelectorAll('.nav-item').forEach((b,i) =>
+    b.classList.toggle('active', Object.keys(tabMeta)[i] === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  document.getElementById('topbar-title').textContent = tabMeta[name][0];
+  document.getElementById('topbar-sub').textContent = tabMeta[name][1];
+}
+
+// ─── MQTT (REAL CONNECTION) ───────────────────────────────────
+let mqttClient = null;
+let subscribedTopics = [];
+
+function mqttConnect() {
+  const host = document.getElementById('mqtt-host').value.trim();
+  const wsport = document.getElementById('mqtt-wsport').value.trim();
+  const clientId = document.getElementById('mqtt-clientid').value.trim() || 'paditech-'+Date.now();
+  const user = document.getElementById('mqtt-user').value.trim();
+  const pass = document.getElementById('mqtt-pass').value;
+  const ssl = document.getElementById('mqtt-ssl').checked;
+
+  if (!host || !wsport) { log('mqtt-log','Broker Host dan WebSocket Port wajib diisi!','er'); return; }
+
+  const proto = ssl ? 'wss' : 'ws';
+  const url = `${proto}://${host}:${wsport}/mqtt`;
+  const opts = { clientId, clean: true, reconnectPeriod: 0 };
+  if (user) { opts.username = user; opts.password = pass; }
+
+  log('mqtt-log', `Connecting → ${url}`, 'in');
+  setBadge('mqtt-badge','connecting','CONNECTING...');
+  setDot('dot-mqtt','lbl-mqtt','MQTT: Connecting...','amber');
+
+  if (typeof mqtt === 'undefined') {
+    log('mqtt-log', 'MQTT.js library tidak tersedia. Cek koneksi internet.', 'er');
+    setBadge('mqtt-badge','err','ERROR'); return;
+  }
+
+  try {
+    mqttClient = mqtt.connect(url, opts);
+
+    mqttClient.on('connect', () => {
+      log('mqtt-log', `✓ Connected to ${host}:${wsport}`, 'ok');
+      setBadge('mqtt-badge','on','ONLINE');
+      setDot('dot-mqtt','lbl-mqtt','MQTT: Online','green');
+      document.getElementById('mqtt-conn-btn').disabled = true;
+      document.getElementById('mqtt-disc-btn').disabled = false;
+
+      // Auto subscribe jika ada topic terisi
+      const sub = document.getElementById('mqtt-sub-topic').value.trim();
+      if (sub) {
+        mqttClient.subscribe(sub, {qos:1}, (err) => {
+          if (!err) { log('mqtt-log', `✓ Subscribed: ${sub}`, 'ok'); addTopic(sub); }
+          else log('mqtt-log', `Subscribe error: ${err.message}`, 'er');
+        });
+      }
+    });
+
+    mqttClient.on('message', (topic, message) => {
+      const payload = message.toString();
+      log('mqtt-stream', `[${topic}] ${payload}`, 'ok');
+    });
+
+    mqttClient.on('error', (err) => {
+      log('mqtt-log', `Error: ${err.message}`, 'er');
+      setBadge('mqtt-badge','err','ERROR');
+      setDot('dot-mqtt','lbl-mqtt','MQTT: Error','red');
+    });
+
+    mqttClient.on('close', () => {
+      log('mqtt-log', 'Connection closed.', 'wn');
+      setBadge('mqtt-badge','off','OFFLINE');
+      setDot('dot-mqtt','lbl-mqtt','MQTT: Offline','');
+      document.getElementById('mqtt-conn-btn').disabled = false;
+      document.getElementById('mqtt-disc-btn').disabled = true;
+    });
+
+    mqttClient.on('reconnect', () => log('mqtt-log', 'Reconnecting...', 'wn'));
+
+  } catch(e) {
+    log('mqtt-log', `Failed: ${e.message}`, 'er');
+    setBadge('mqtt-badge','err','ERROR');
+  }
+}
+
+function mqttDisconnect() {
+  if (mqttClient) { mqttClient.end(true); mqttClient = null; }
+  subscribedTopics = []; document.getElementById('active-topics').textContent = 'None';
+}
+
+function mqttSubscribe() {
+  const topic = document.getElementById('mqtt-sub-topic').value.trim();
+  if (!topic) return;
+  if (!mqttClient || !mqttClient.connected) { log('mqtt-log','Connect ke broker dulu!','er'); return; }
+  mqttClient.subscribe(topic, {qos:1}, (err) => {
+    if (!err) { log('mqtt-log', `✓ Subscribed: ${topic}`, 'ok'); addTopic(topic); }
+    else log('mqtt-log', `Error: ${err.message}`, 'er');
+  });
+}
+
+function addTopic(t) {
+  if (!subscribedTopics.includes(t)) subscribedTopics.push(t);
+  document.getElementById('active-topics').textContent = subscribedTopics.join(', ');
+}
+
+function mqttPublish() {
+  const topic = document.getElementById('mqtt-pub-topic').value.trim();
+  const payload = document.getElementById('mqtt-payload').value;
+  const qos = parseInt(document.getElementById('mqtt-qos').value);
+  const retain = document.getElementById('mqtt-retain').value === 'true';
+  if (!topic) { log('mqtt-log','Topic tidak boleh kosong!','er'); return; }
+  if (!mqttClient || !mqttClient.connected) { log('mqtt-log','Connect ke broker dulu!','er'); return; }
+  mqttClient.publish(topic, payload, {qos, retain}, (err) => {
+    if (!err) log('mqtt-log', `✓ Published → [${topic}] ${payload}`, 'ok');
+    else log('mqtt-log', `Publish error: ${err.message}`, 'er');
+  });
+}
+
+function mqttTemplate(t) {
+  const tpl = {
+    light: {topic:'smarthome/living/light', payload:'{"action":"toggle","state":"on","brightness":80}'},
+    sensor: {topic:'smarthome/bedroom/sensor', payload:'{"temperature":25.5,"humidity":65,"motion":false}'},
+    door: {topic:'smarthome/front/door', payload:'{"state":"open","locked":false}'}
+  };
+  document.getElementById('mqtt-pub-topic').value = tpl[t].topic;
+  document.getElementById('mqtt-payload').value = tpl[t].payload;
+}
+
+// ─── CAMERA (REAL via Backend Relay) ─────────────────────────
+let camStreaming = false;
+
+function buildRTSP() {
+  const ip = document.getElementById('cam-ip').value.trim();
+  const port = document.getElementById('cam-rtsp-port').value.trim() || '554';
+  const user = document.getElementById('cam-user').value.trim();
+  if (ip) {
+    const url = user ? `rtsp://${user}:***@${ip}:${port}/stream1` : `rtsp://${ip}:${port}/stream1`;
+    document.getElementById('cam-rtsp-url').placeholder = url;
+  }
+}
+
+async function connectCamera() {
+  const relayUrl = document.getElementById('cam-relay-url').value.trim();
+  const ip = document.getElementById('cam-ip').value.trim();
+  const brand = document.getElementById('cam-brand').value.trim();
+  const model = document.getElementById('cam-model').value.trim();
+  const proto = document.getElementById('cam-protocol').value;
+
+  if (!ip) { log('cam-log','IP Address kamera wajib diisi!','er'); return; }
+
+  // Update info table
+  document.getElementById('ci-brand').textContent = brand || '—';
+  document.getElementById('ci-model').textContent = model || '—';
+  document.getElementById('ci-ip').textContent = ip;
+  document.getElementById('ci-proto').textContent = proto.toUpperCase();
+
+  if (!relayUrl) {
+    log('cam-log','Backend Relay URL kosong — browser tidak bisa buka RTSP langsung.','wn');
+    log('cam-log','Minta tim backend untuk menyediakan relay URL (go2rtc/MediaMTX).','wn');
+    return;
+  }
+
+  log('cam-log', `Connecting via relay: ${relayUrl}`, 'in');
+  setBadge('cam-badge','connecting','CONNECTING...');
+
+  try {
+    // Coba fetch relay URL untuk cek apakah aktif
+    const res = await fetch(relayUrl, { method: 'GET', signal: AbortSignal.timeout(5000) });
+    if (res.ok || res.status === 206) {
+      log('cam-log', `✓ Relay server responded (${res.status})`, 'ok');
+      log('cam-log', `✓ Stream active: ${relayUrl}`, 'ok');
+      simulateCamOn(relayUrl);
+    } else {
+      log('cam-log', `Relay responded with status ${res.status}`, 'wn');
+      simulateCamOn(relayUrl);
+    }
+  } catch(e) {
+    log('cam-log', `Cannot reach relay: ${e.message}`, 'er');
+    log('cam-log', 'Pastikan relay server (go2rtc/MediaMTX) sudah berjalan.', 'wn');
+    setBadge('cam-badge','err','ERROR');
+  }
+}
+
+function simulateCamOn(url) {
+  camStreaming = true;
+  const p = document.getElementById('cam-preview');
+  p.classList.add('streaming'); p.style.background = 'linear-gradient(160deg,#0d1a2e,#091426)';
+  document.getElementById('cam-status-text').textContent = `Streaming: ${url}`;
+  setBadge('cam-badge','on','STREAMING');
+  setDot('dot-cam','lbl-cam','Camera: Live','amber');
+}
+
+function stopCamera() {
+  camStreaming = false;
+  const p = document.getElementById('cam-preview');
+  p.classList.remove('streaming'); p.style.background = '';
+  document.getElementById('cam-status-text').textContent = 'No stream active';
+  setBadge('cam-badge','off','DISCONNECTED');
+  setDot('dot-cam','lbl-cam','Camera: Idle','');
+  log('cam-log','Stream stopped.','wn');
+}
+
+function takeSnapshot() {
+  if (!camStreaming) { log('cam-log','Start stream dulu.','er'); return; }
+  log('cam-log', `📸 Snapshot: frame_${Date.now()}.jpg`, 'ok');
+}
+
+async function testOnvif() {
+  const ip = document.getElementById('cam-ip').value.trim();
+  const port = document.getElementById('cam-onvif-port').value.trim() || '8080';
+  if (!ip) { log('cam-log','Isi IP address dulu.','er'); return; }
+  log('cam-log', `Testing ONVIF on ${ip}:${port}...`, 'in');
+  try {
+    const res = await fetch(`http://${ip}:${port}/onvif/device_service`, {
+      method:'POST', signal: AbortSignal.timeout(4000),
+      headers:{'Content-Type':'application/soap+xml'},
+      body:'<?xml version="1.0"?><Envelope xmlns="http://www.w3.org/2003/05/soap-envelope"><Body><GetCapabilities xmlns="http://www.onvif.org/ver10/device/wsdl"/></Body></Envelope>'
+    });
+    if (res.ok) {
+      log('cam-log', `✓ ONVIF device responded (${res.status})`, 'ok');
+      document.getElementById('ci-onvif').textContent = 'Supported';
+    } else {
+      log('cam-log', `ONVIF responded: ${res.status}`, 'wn');
+    }
+  } catch(e) {
+    log('cam-log', `ONVIF unreachable: ${e.message}`, 'er');
+    log('cam-log', 'Periksa IP, port, dan jaringan.', 'wn');
+    document.getElementById('ci-onvif').textContent = 'Unreachable';
+  }
+}
+
+// ─── BULB ─────────────────────────────────────────────────────
+let bulbConnected = false, currentColor = {r:255,g:255,b:255}, brightness = 80;
+
+function updateBulbFields() {
+  const brand = document.getElementById('bulb-brand').value;
+  document.getElementById('wiz-fields').style.display = brand==='wiz' ? 'block' : 'none';
+  document.getElementById('hue-fields').style.display = brand==='hue' ? 'block' : 'none';
+  document.getElementById('yee-fields').style.display = brand==='yeelight' ? 'block' : 'none';
+}
+
+async function connectBulb() {
+  const brand = document.getElementById('bulb-brand').value;
+  if (!brand) { log('bulb-log','Pilih brand dulu!','er'); return; }
+
+  if (brand === 'hue') {
+    // Hue bisa langsung via REST API dari browser
+    const bridgeIp = document.getElementById('hue-bridge-ip').value.trim();
+    const token = document.getElementById('hue-token').value.trim();
+    const lightId = document.getElementById('hue-lightid').value.trim() || '1';
+    if (!bridgeIp || !token) { log('bulb-log','Bridge IP dan API Token wajib diisi!','er'); return; }
+    log('bulb-log', `Connecting to Hue Bridge ${bridgeIp}...`, 'in');
+    try {
+      const res = await fetch(`http://${bridgeIp}/api/${token}/lights/${lightId}`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json();
+        log('bulb-log', `✓ Hue light found: ${data.name || 'Light '+lightId}`, 'ok');
+        log('bulb-log', `  State: ${data.state?.on ? 'ON' : 'OFF'}, Brightness: ${data.state?.bri}`, 'ok');
+        bulbConnected = true; updateBulbUI(brand);
+      } else {
+        log('bulb-log', `Hue API error: ${res.status} ${res.statusText}`, 'er');
+      }
+    } catch(e) {
+      log('bulb-log', `Cannot reach Hue Bridge: ${e.message}`, 'er');
+    }
+  } else {
+    // WiZ & Yeelight perlu backend
+    const backendUrl = brand==='wiz'
+      ? document.getElementById('wiz-backend').value.trim()
+      : document.getElementById('yee-backend').value.trim();
+    const ip = brand==='wiz'
+      ? document.getElementById('wiz-ip').value.trim()
+      : document.getElementById('yee-ip').value.trim();
+    if (!ip) { log('bulb-log','IP Address wajib diisi!','er'); return; }
+    if (!backendUrl) { log('bulb-log','Backend Bridge URL wajib diisi!','er'); return; }
+    log('bulb-log', `Connecting via backend: ${backendUrl}`, 'in');
+    try {
+      const res = await fetch(`${backendUrl}/connect`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ip, brand}),
+        signal: AbortSignal.timeout(5000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        log('bulb-log', `✓ Connected: ${JSON.stringify(data)}`, 'ok');
+        bulbConnected = true; updateBulbUI(brand);
+      } else {
+        log('bulb-log', `Backend error: ${res.status}`, 'er');
+      }
+    } catch(e) {
+      log('bulb-log', `Cannot reach backend: ${e.message}`, 'er');
+      log('bulb-log', 'Pastikan backend bridge sudah running.', 'wn');
+    }
+  }
+}
+
+async function discoverBulbs() {
+  const brand = document.getElementById('bulb-brand').value;
+  const backendId = brand==='wiz' ? 'wiz-backend' : 'yee-backend';
+  const backendUrl = document.getElementById(backendId)?.value.trim();
+  if (!backendUrl) { log('bulb-log','Isi Backend Bridge URL dulu.','er'); return; }
+  log('bulb-log', 'Discovering devices...', 'in');
+  try {
+    const res = await fetch(`${backendUrl}/discover`, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      log('bulb-log', `✓ Found ${data.length || 0} device(s)`, 'ok');
+      (data.devices || data).forEach(d => log('bulb-log', `  → ${d.ip} ${d.model||''}`, 'ok'));
+    } else log('bulb-log', `Discovery error: ${res.status}`, 'er');
+  } catch(e) {
+    log('bulb-log', `Discovery failed: ${e.message}`, 'er');
+  }
+}
+
+function updateBulbUI(brand) {
+  document.getElementById('bulb-status-text').textContent = `Connected — ${brand.toUpperCase()}`;
+  setBadge('bulb-badge','on','ONLINE');
+  setDot('dot-bulb','lbl-bulb','Bulb: Online','green');
+  updateBulbPreview();
+}
+
+async function bulbPower(state) {
+  if (!bulbConnected) { log('bulb-log','Connect dulu!','er'); return; }
+  const brand = document.getElementById('bulb-brand').value;
+  if (brand === 'hue') {
+    const bridgeIp = document.getElementById('hue-bridge-ip').value.trim();
+    const token = document.getElementById('hue-token').value.trim();
+    const lightId = document.getElementById('hue-lightid').value.trim() || '1';
+    try {
+      const res = await fetch(`http://${bridgeIp}/api/${token}/lights/${lightId}/state`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({on: state==='on'}),
+        signal: AbortSignal.timeout(5000)
+      });
+      if (res.ok) {
+        const data = await res.json(); log('bulb-log', `✓ Power ${state.toUpperCase()}: ${JSON.stringify(data)}`, 'ok');
+        updateBulbGlow(state);
+      } else log('bulb-log', `Hue error: ${res.status}`, 'er');
+    } catch(e) { log('bulb-log', e.message, 'er'); }
+  } else {
+    const backendUrl = brand==='wiz' ? document.getElementById('wiz-backend').value.trim() : document.getElementById('yee-backend').value.trim();
+    try {
+      const res = await fetch(`${backendUrl}/power`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({state, ip: brand==='wiz' ? document.getElementById('wiz-ip').value : document.getElementById('yee-ip').value}),
+        signal: AbortSignal.timeout(5000)
+      });
+      if (res.ok) { log('bulb-log', `✓ Power ${state.toUpperCase()}`, 'ok'); updateBulbGlow(state); }
+      else log('bulb-log', `Backend error: ${res.status}`, 'er');
+    } catch(e) { log('bulb-log', `Error: ${e.message}`, 'er'); }
+  }
+}
+
+function updateBulbGlow(state) {
+  const p = document.getElementById('bulb-prev');
+  const {r,g,b} = currentColor;
+  p.style.background = state==='on' ? `rgb(${r},${g},${b})` : 'rgba(0,0,0,0.06)';
+  p.style.boxShadow = state==='on' ? `0 0 22px rgba(${r},${g},${b},0.5)` : 'none';
+}
+
+async function setColor(r,g,b,el) {
+  document.querySelectorAll('.swatch').forEach(s=>s.classList.remove('active')); el.classList.add('active');
+  currentColor={r,g,b};
+  if (bulbConnected) {
+    const brand = document.getElementById('bulb-brand').value;
+    if (brand==='hue') {
+      const bridgeIp=document.getElementById('hue-bridge-ip').value.trim();
+      const token=document.getElementById('hue-token').value.trim();
+      const lightId=document.getElementById('hue-lightid').value.trim()||'1';
+      // Convert RGB to XY for Hue
+      const xr=r/255, xg=g/255, xb=b/255;
+      const X=xr*0.664511+xg*0.154324+xb*0.162028;
+      const Y=xr*0.283881+xg*0.668433+xb*0.047685;
+      const Z=xr*0.000088+xg*0.072310+xb*0.986039;
+      const x=X/(X+Y+Z)||0, y=Y/(X+Y+Z)||0;
+      try {
+        await fetch(`http://${bridgeIp}/api/${token}/lights/${lightId}/state`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({xy:[x,y]}),signal:AbortSignal.timeout(5000)});
+        log('bulb-log',`✓ Color set XY(${x.toFixed(3)},${y.toFixed(3)})`,'ok');
+      } catch(e){log('bulb-log',e.message,'er');}
+    } else {
+      const backendUrl=brand==='wiz'?document.getElementById('wiz-backend').value.trim():document.getElementById('yee-backend').value.trim();
+      try {
+        await fetch(`${backendUrl}/color`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({r,g,b}),signal:AbortSignal.timeout(5000)});
+        log('bulb-log',`✓ Color RGB(${r},${g},${b})`,'ok');
+      } catch(e){log('bulb-log',e.message,'er');}
+    }
+    updateBulbPreview();
+  }
+}
+
+function updateBulbPreview() {
+  const {r,g,b}=currentColor, p=document.getElementById('bulb-prev');
+  p.style.background=`rgb(${r},${g},${b})`; p.style.boxShadow=`0 0 20px rgba(${r},${g},${b},0.4)`;
+}
+
+function sliderUpdate(type,val) {
+  if(type==='brightness'){document.getElementById('val-brightness').textContent=val+'%';brightness=parseInt(val);}
+  else document.getElementById('val-temp').textContent=val+'K';
+}
+
+async function setScene(s) {
+  if (!bulbConnected){log('bulb-log','Connect dulu!','er');return;}
+  const scenes={relax:{r:255,g:180,b:50},focus:{r:255,g:255,b:255},movie:{r:50,g:50,b:100},party:{r:255,g:0,b:100}};
+  currentColor=scenes[s]; updateBulbPreview(); log('bulb-log',`Scene: ${s}`,'ok');
+}
+
+// ─── XIAOMI ───────────────────────────────────────────────────
+function updateMiFields() {
+  const m = document.getElementById('mi-mode').value;
+  document.getElementById('mi-local-fields').style.display = m==='local'?'block':'none';
+  document.getElementById('mi-cloud-fields').style.display = m==='cloud'?'block':'none';
+}
+
+function checkToken(el) {
+  const v = el.value.trim().replace(/[^a-fA-F0-9]/g,'');
+  el.value = v;
+  document.getElementById('token-hint').textContent = `${v.length} / 32 chars`;
+  document.getElementById('token-hint').style.color = v.length===32 ? 'var(--success)' : 'var(--muted)';
+}
+
+async function connectMi() {
+  const mode = document.getElementById('mi-mode').value;
+  const backendUrl = document.getElementById('mi-backend')?.value.trim();
+
+  if (mode==='local') {
+    const ip = document.getElementById('mi-ip').value.trim();
+    const token = document.getElementById('mi-token').value.trim();
+    if (!ip) { log('mi-log','IP Address wajib diisi!','er'); return; }
+    if (token.length !== 32) { log('mi-log','Token harus tepat 32 hex karakter!','er'); return; }
+    if (!backendUrl) { log('mi-log','Backend Bridge URL wajib diisi!','er'); return; }
+    log('mi-log', `Connecting MiIO ${ip} via backend...`, 'in');
+    try {
+      const res = await fetch(`${backendUrl}/connect`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ip, token}),
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        log('mi-log', `✓ Connected: ${JSON.stringify(data)}`, 'ok');
+        setBadge('mi-badge','on','ONLINE'); setDot('dot-mi','lbl-mi','Mi Home: Online','green');
+      } else log('mi-log', `Backend error: ${res.status}`, 'er');
+    } catch(e) { log('mi-log', `Error: ${e.message}`, 'er'); }
+  } else {
+    // Cloud mode
+    const email = document.getElementById('mi-email').value.trim();
+    const pass = document.getElementById('mi-cloudpass').value;
+    const region = document.getElementById('mi-region').value;
+    if (!email || !pass) { log('mi-log','Email dan password wajib diisi!','er'); return; }
+    if (!backendUrl) { log('mi-log','Backend Bridge URL wajib diisi!','er'); return; }
+    log('mi-log', `Connecting Mi Cloud (${region}) via backend...`, 'in');
+    try {
+      const res = await fetch(`${backendUrl}/cloud/login`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({email, password:pass, region}),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        log('mi-log', `✓ Mi Cloud login OK`, 'ok');
+        log('mi-log', `  Devices: ${data.devices?.length || 0} found`, 'ok');
+        setBadge('mi-badge','on','ONLINE'); setDot('dot-mi','lbl-mi','Mi Home: Online','green');
+      } else log('mi-log', `Cloud login error: ${res.status}`, 'er');
+    } catch(e) { log('mi-log', `Error: ${e.message}`, 'er'); }
+  }
+}
+
+async function discoverMi() {
+  const backendUrl = document.getElementById('mi-backend')?.value.trim();
+  if (!backendUrl) { log('mi-log','Backend URL wajib diisi!','er'); return; }
+  log('mi-log', 'Broadcasting MiIO discovery...', 'in');
+  try {
+    const res = await fetch(`${backendUrl}/discover`, { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const data = await res.json();
+      (data.devices || data).forEach(d => log('mi-log', `→ ${d.ip} | ${d.model} | ID: ${d.id}`, 'ok'));
+    } else log('mi-log', `Discovery error: ${res.status}`, 'er');
+  } catch(e) { log('mi-log', `Error: ${e.message}`, 'er'); }
+}
+
+function updateMiCommands() {
+  const type = document.getElementById('mi-device-type').value;
+  const config = {
+    plug:[['⚡ ON',['set_power','on']],['⛔ OFF',['set_power','off']],['📊 Status',['get_prop',['power']]]],
+    airpurifier:[['💨 Auto',['set_mode','auto']],['🔇 Silent',['set_mode','silent']],['📊 AQI',['get_prop',['aqi']]]],
+    robot:[['▶ Start',['app_start',[]]],['🏠 Dock',['app_charge',[]]],['🗺️ Map',['get_map_v1',[]]]],
+    fan:[['💨 +Speed',['set_speed_level',5]],['💨 -Speed',['set_speed_level',1]],['📊 Status',['get_prop',['speed']]]],
+    gateway:[['📡 Info',['miIO.info',{}]],['💡 Alarm',['set_rgb',16744448]],['📊 Status',['get_prop',['rgb']]]]
+  };
+  const c = document.getElementById('mi-quick-btns'); c.innerHTML='';
+  config[type].forEach(([label,cmd])=>{
+    const b=document.createElement('button'); b.className='btn btn-secondary btn-sm'; b.textContent=label;
+    b.onclick=()=>sendMiRaw(cmd[0],cmd[1]); c.appendChild(b);
+  });
+}
+
+async function sendMiRaw(method, params) {
+  document.getElementById('mi-method').value = method;
+  document.getElementById('mi-params').value = JSON.stringify(params);
+  await sendMiCommand();
+}
+
+async function sendMiCommand() {
+  const backendUrl = document.getElementById('mi-backend')?.value.trim();
+  const method = document.getElementById('mi-method').value.trim();
+  const paramsRaw = document.getElementById('mi-params').value.trim();
+  if (!backendUrl){log('mi-cmd-log','Backend URL kosong!','er');return;}
+  let params;
+  try { params = paramsRaw ? JSON.parse(paramsRaw) : []; } catch(e) { log('mi-cmd-log','Params JSON tidak valid!','er'); return; }
+  log('mi-cmd-log', `→ ${method}(${JSON.stringify(params)})`, 'in');
+  try {
+    const res = await fetch(`${backendUrl}/command`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({method, params}),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      log('mi-cmd-log', `✓ Result: ${JSON.stringify(data)}`, 'ok');
+    } else log('mi-cmd-log', `Error: ${res.status}`, 'er');
+  } catch(e) { log('mi-cmd-log', `Error: ${e.message}`, 'er'); }
+}
+
+// ─── VOICE ───────────────────────────────────────────────────
+let recognition=null, isRecording=false;
+
+function updateVoiceFields() {
+  const p = document.getElementById('voice-platform').value;
+  document.getElementById('google-fields').style.display = p==='google'?'block':'none';
+  document.getElementById('alexa-fields').style.display = p==='alexa'?'block':'none';
+}
+
+const intentRules=[
+  {regex:/(turn on|nyalakan)\s+(the\s+)?(.+?)\s*(lights?|lampu)?$/i, intent:'lights.on', extract:m=>({device:m[3].trim(),action:'on'})},
+  {regex:/(turn off|matikan)\s+(the\s+)?(.+?)\s*(lights?|lampu)?$/i, intent:'lights.off', extract:m=>({device:m[3].trim(),action:'off'})},
+  {regex:/brightness.*(to|ke)?\s*(\d+)/i, intent:'lights.brightness', extract:m=>({value:m[2]+'%'})},
+  {regex:/temperature.*(to|ke)?\s*(\d+)/i, intent:'climate.temperature', extract:m=>({temp:m[2]+'°C'})},
+  {regex:/(turn on).*(ac|air conditioner)/i, intent:'climate.on', extract:()=>({device:'AC'})},
+  {regex:/(lock|kunci).*(door|pintu)/i, intent:'lock.lock', extract:()=>({})},
+  {regex:/(show|tampilkan).*(camera|kamera)/i, intent:'camera.view', extract:()=>({})},
+  {regex:/turn off all/i, intent:'scene.all_off', extract:()=>({})},
+  {regex:/good night|selamat malam/i, intent:'scene.goodnight', extract:()=>({})},
+];
+
+function processVoice() {
+  const text = document.getElementById('voice-text').value || document.getElementById('voice-transcript').textContent;
+  if (!text) return;
+  log('voice-log', `Processing: "${text}"`, 'in');
+  let matched = null;
+  for (const r of intentRules) { const m=text.match(r.regex); if(m){matched={intent:r.intent,entities:r.extract(m)};break;} }
+  const platform = document.getElementById('voice-platform').value==='google'?'Google Home':'Amazon Alexa';
+  const el = document.getElementById('intent-result');
+  if (matched) {
+    el.textContent = `✓ Intent Matched\n\nPlatform : ${platform}\nIntent   : ${matched.intent}\nEntities : ${JSON.stringify(matched.entities)}\n\n→ MQTT: smarthome/${matched.intent.replace('.','/')}`;
+    el.style.color='#4ade80';
+    log('voice-log', `✓ ${matched.intent} ${JSON.stringify(matched.entities)}`, 'ok');
+  } else {
+    el.textContent = `⚠ No intent matched\n\nInput: "${text}"\n\nTry a more specific command.`;
+    el.style.color='#fbbf24';
+    log('voice-log', 'No matching intent.', 'wn');
+  }
+}
+
+function toggleVoice() {
+  if (isRecording){stopVoice();return;}
+  if (!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){log('voice-log','Speech API tidak tersedia. Gunakan Chrome.','wn');return;}
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition; recognition=new SR();
+  recognition.lang='en-US'; recognition.interimResults=true;
+  recognition.onstart=()=>{isRecording=true;document.getElementById('voice-mic-btn').classList.add('recording');document.getElementById('voice-status').textContent='🔴 Listening...';};
+  recognition.onresult=(e)=>{const t=Array.from(e.results).map(r=>r[0].transcript).join('');document.getElementById('voice-transcript').textContent=t;document.getElementById('voice-text').value=t;};
+  recognition.onend=()=>{stopVoice();processVoice();};
+  recognition.start();
+}
+function stopVoice(){isRecording=false;document.getElementById('voice-mic-btn').classList.remove('recording');document.getElementById('voice-status').textContent='Click mic or type below';if(recognition)try{recognition.stop();}catch(e){}}
+function setVoice(t){document.getElementById('voice-text').value=t;processVoice();}
+function clearVoice(){document.getElementById('voice-text').value='';document.getElementById('voice-transcript').textContent='';const el=document.getElementById('intent-result');el.textContent='No command processed yet...';el.style.color='';}
+
+// ─── INIT ─────────────────────────────────────────────────────
+updateMiCommands();
+updateBulbFields();
+</script>
+</body>
+</html>

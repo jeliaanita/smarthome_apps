@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "403758366529",
+    "project_id": "philoin-23067",
+    "storage_bucket": "philoin-23067.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:403758366529:android:8f7f7a79006d1d3adbebc0",
+        "android_client_info": {
+          "package_name": "com.paditech.mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "403758366529-n0os8qmuus66r5er1vb77s26k03v0r68.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.paditech.mobile",
+            "certificate_hash": "e736d26d28ce3ee8fea1c3fbe79fc590ae8d5510"
+          }
+        },
+        {
+          "client_id": "403758366529-utisrt37s93r1ojqv5ttambrs2lb6pfr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2Toz0swbAIklmTqMzzkx5yMOzB5C5jmQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "403758366529-utisrt37s93r1ojqv5ttambrs2lb6pfr.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "403758366529-smjmomdsaukl77vc2707r8sthpjhd164.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.paditech.mobile"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
