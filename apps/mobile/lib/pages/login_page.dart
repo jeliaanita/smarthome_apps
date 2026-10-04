@@ -378,22 +378,42 @@ class _LoginPageState extends State<LoginPage> {
 }
 
   Widget _buildContinueButton() {
-    final canContinue = _emailController.text.isNotEmpty &&
-        _passwordController.text.isNotEmpty;
-    return SizedBox(
-      width: double.infinity,
-      height: AppSpacing.buttonHeight,
-      child: ElevatedButton(
-        onPressed: (_isLoading || !canContinue) ? null : _onContinue,
-        child: _isLoading
-            ? const SizedBox(
-                width: 20, height: 20,
-                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-              )
-            : const Text('Continue'),
+  final canContinue = _emailController.text.isNotEmpty &&
+      _passwordController.text.isNotEmpty;
+  return SizedBox(
+    width: double.infinity,
+    height: AppSpacing.buttonHeight,
+    child: ElevatedButton(
+      style: ElevatedButton.styleFrom(
+      backgroundColor: AppColors.primary,
+      foregroundColor: Colors.white,
+      disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.35),
+      disabledForegroundColor: Colors.white,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
       ),
-    );
-  }
+      textStyle: const TextStyle(
+        inherit: true,
+        fontFamily: 'Inter',
+        fontSize: 16,
+        fontWeight: FontWeight.w500,
+      ),
+),
+      onPressed: (_isLoading || !canContinue) ? null : _onContinue,
+      child: _isLoading
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            )
+          : const Text('Continue'),
+    ),
+  );
+}
 
   Widget _buildTermsText() {
     return Padding(
