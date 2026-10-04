@@ -53,8 +53,8 @@ class OpenHABController extends ChangeNotifier {
   bool get hasCameraThings => cameraThings.isNotEmpty;
 
   /// Grup AC hasil auto-discovery lewat pola penamaan Item openHAB — Item
-  /// generator openHAB otomatis menamai Point sebagai "<NamaGroup><label
-  /// channel dg spasi->underscore>", jadi tiap unit AC (Group Equipment
+  /// generator openHAB otomatis menamai Point sebagai "NamaGroup + label
+  /// channel dg spasi->underscore", jadi tiap unit AC (Group Equipment
   /// apapun namanya) selalu punya pola akhiran yang sama persis karena
   /// semua unit AC pakai Thing template MQTT yang sama (lihat channel
   /// POWER_AC/MODE_AC/FAN_AC/dst di file .things). Deteksi generik ini
@@ -366,8 +366,58 @@ void resetConnection() {
   notifyListeners();
 }
 
+  /// Muat ulang SEMUA data (Items, Groups, Locations, Things) lalu sambungkan
+  /// ulang stream real-time. Dipakai refresh manual, app kembali aktif,
+  /// setelah simpan Thing/Item/Room, dan saat koneksi pulih — tanpa perlu
+  /// sign out / force close (QC 08). Berurutan: loadItems dulu karena
+  /// loadLocations menambahkan ke _allGroups yang ditimpa loadItems.
+  Future<void> refresh() async {
+    if (_serverUrl.isEmpty) return;
+    _isConnected = await _service.isServerReachable();
+    notifyListeners();
+    if (!_isConnected) {
+      _error = 'Tidak dapat terhubung ke openHAB server.\nPastikan server menyala dan URL benar.';
+      notifyListeners();
+      return;
+    }
+    await loadItems();
+    await Future.wait([loadLocations(), loadThings()]);
+    _startRealTimeUpdates();
+  }
+
+  /// Hubungkan ulang dengan konfigurasi baru (URL + token/user/password).
+  /// updateServerUrl() hanya mengganti URL — kredensial baru TIDAK ikut
+  /// terpasang di service, jadi login ke server berkredensial baru gagal
+  /// sampai sign out / force close. Pakai ini saat konfigurasi disimpan.
+  Future<bool> reconnectWithConfig(InstallationConfig config) async {
+    await _eventSub?.cancel();
+    _isConnected = false;
+    _items = [];
+    _locations = [];
+    _allGroups = [];
+    _things = [];
+    _error = null;
+    notifyListeners();
+    await initializeWithConfig(config);
+    return _isConnected;
+  }
+
+  Timer? _reloadDebounce;
+
+  /// Item ditambah/dihapus/diubah di server → muat ulang (debounce 1,5 dtk
+  /// karena openHAB mengirim banyak event beruntun saat import/generate).
+  void _scheduleReload() {
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(milliseconds: 1500), () async {
+      await loadItems();
+      await loadLocations();
+    });
+  }
+
   Future<void> loadItems() async {
-    _isLoading = true;
+    // Spinner hanya saat pertama kali (belum ada data). Refresh berikutnya
+    // diam-diam, supaya grid tidak berkedip jadi loading tiap 15 detik.
+    _isLoading = _items.isEmpty;
     _error = null;
     notifyListeners();
 
@@ -561,13 +611,19 @@ void resetConnection() {
 
   void _startRealTimeUpdates() {
     _eventSub?.cancel();
+    void reconnect() {
+      Future.delayed(const Duration(seconds: 5), () {
+        if (_isConnected) _startRealTimeUpdates();
+      });
+    }
+
     _eventSub = _service.streamEvents().listen(
       _handleEvent,
-      onError: (e) {
-        Future.delayed(const Duration(seconds: 5), () {
-          if (_isConnected) _startRealTimeUpdates();
-        });
-      },
+      onError: (e) => reconnect(),
+      // Stream yang ditutup diam-diam (mis. iOS memutus koneksi saat app
+      // di background) sebelumnya tidak pernah tersambung lagi.
+      onDone: reconnect,
+      cancelOnError: true,
     );
   }
 
@@ -575,6 +631,13 @@ void resetConnection() {
     final topic = event['topic'] as String? ?? '';
     final parts = topic.split('/');
     if (parts.length < 4) return;
+
+    // Perubahan struktur Item (tambah/hapus/ubah) → sinkronkan ulang.
+    if (parts[1] == 'items' &&
+        (parts[3] == 'added' || parts[3] == 'removed' || parts[3] == 'updated')) {
+      _scheduleReload();
+      return;
+    }
 
     final itemName   = parts[2];
     final rawPayload = event['payload'];
@@ -600,6 +663,7 @@ void resetConnection() {
 
   @override
   void dispose() {
+    _reloadDebounce?.cancel();
     _eventSub?.cancel();
     super.dispose();
   }

@@ -51,6 +51,12 @@ class OHRule {
     );
   }
 
+  /// Sama seperti web openHAB: Scene = Rule bertag "Scene" (tanpa trigger),
+  /// Script = Rule bertag "Script". Keduanya punya halaman sendiri, jadi
+  /// tidak ditampilkan di daftar Rules biasa.
+  bool get isScene => tags.contains('Scene');
+  bool get isScript => tags.contains('Script');
+
   OHRule copyWith({bool? enabled, String? status}) => OHRule(
         uid: uid,
         name: name,
@@ -186,7 +192,13 @@ class _RulesManagementPageState extends State<RulesManagementPage>
     setState(() { _isLoading = true; _errorMsg = null; });
     try {
       final rules = await _svc!.getRules();
-      setState(() { _allRules = rules; _applyFilter(); });
+      // Satu objek, satu tempat: Scene & Script tetap tersimpan sebagai
+      // Rule di openHAB, tapi ditampilkan di menu masing-masing.
+      final plain = rules.where((r) => !r.isScene && !r.isScript).toList();
+      setState(() {
+        _allRules = plain;
+        _applyFilter();
+      });
       unawaited(_animCtrl.forward(from: 0));
     } catch (e) {
       setState(() => _errorMsg = e.toString());
@@ -299,6 +311,13 @@ class _RulesManagementPageState extends State<RulesManagementPage>
               color: isDark ? Colors.white : const Color(0xCC18181B))),
       actions: [
         IconButton(
+          icon: Icon(Icons.info_outline_rounded,
+              size: 22,
+              color: isDark ? Colors.white : const Color(0xFF18181B)),
+          onPressed: _showInfoSheet,
+          tooltip: 'Apa itu Rule?',
+        ),
+        IconButton(
           icon: Icon(Icons.add_rounded,
               size: 24,
               color: isDark ? Colors.white : const Color(0xFF18181B)),
@@ -320,6 +339,100 @@ class _RulesManagementPageState extends State<RulesManagementPage>
         ),
         const SizedBox(width: 4),
       ],
+    );
+  }
+
+  void _showInfoSheet() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor = isDark ? Colors.white : const Color(0xFF18181B);
+    final bodyColor = isDark ? Colors.white70 : const Color(0xFF52525B);
+    Widget section(IconData icon, Color color, String title, String body) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, size: 18, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title,
+                    style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: titleColor)),
+                const SizedBox(height: 3),
+                Text(body,
+                    style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 12.5,
+                        height: 1.5,
+                        color: bodyColor)),
+              ]),
+            ),
+          ]),
+        );
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        padding: EdgeInsets.fromLTRB(
+            24, 12, 24, 24 + MediaQuery.of(ctx).padding.bottom),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF27272A) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF3F3F46) : const Color(0xFFE4E4E7),
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text('Rule dan Scene',
+                style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                    color: titleColor)),
+            const SizedBox(height: 16),
+            section(
+                Icons.auto_awesome_rounded,
+                const Color(0xFFF59E0B),
+                'Scene',
+                'Menyimpan sekumpulan aksi Item, misalnya mematikan lampu dan '
+                'AC sekaligus. Dijalankan dari tombol Aktifkan, atau dipanggil '
+                'oleh sebuah Rule. Scene tidak punya trigger atau kondisi sendiri.'),
+            section(
+                Icons.bolt_rounded,
+                const Color(0xFF6366F1),
+                'Rule',
+                'Automasi berbasis pemicu: pada waktu atau kejadian tertentu, '
+                'jalankan aksi, dengan kondisi opsional. Contoh: setiap pukul '
+                '22.00, matikan lampu teras jika tidak ada gerakan.'),
+            section(
+                Icons.link_rounded,
+                const Color(0xFF22C55E),
+                'Satu objek, satu tempat',
+                'Sama seperti openHAB, Scene disimpan sebagai Rule bertag '
+                '"Scene" dan dikelola di halaman Scenes, sehingga tidak '
+                'ditampilkan lagi di daftar Rules.'),
+          ],
+        ),
+      ),
     );
   }
 
@@ -392,12 +505,16 @@ class _RulesManagementPageState extends State<RulesManagementPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSummaryCards(isDark),
-                  const SizedBox(height: 20),
                   _buildFilterChips(isDark),
                   const SizedBox(height: 16),
                   _buildListHeader(isDark),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 2),
+                  Text('Automasi berbasis pemicu dan kondisi',
+                      style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          color: isDark ? Colors.white38 : const Color(0xFF71717A))),
+                  const SizedBox(height: 12),
                 ],
               ),
             ),
@@ -442,22 +559,6 @@ class _RulesManagementPageState extends State<RulesManagementPage>
         ],
       ),
     );
-  }
-
-  Widget _buildSummaryCards(bool isDark) {
-    return Row(children: [
-      Expanded(child: _SummaryCard(
-          isDark: isDark, label: 'Total', count: _allRules.length,
-          color: const Color(0xFF6366F1), icon: FontAwesomeIcons.scroll)),
-      const SizedBox(width: 10),
-      Expanded(child: _SummaryCard(
-          isDark: isDark, label: 'Aktif', count: _enabledCount,
-          color: const Color(0xFF22C55E), icon: FontAwesomeIcons.circleCheck)),
-      const SizedBox(width: 10),
-      Expanded(child: _SummaryCard(
-          isDark: isDark, label: 'Nonaktif', count: _disabledCount,
-          color: const Color(0xFF94A3B8), icon: FontAwesomeIcons.circlePause)),
-    ]);
   }
 
   Widget _buildFilterChips(bool isDark) {
@@ -590,63 +691,6 @@ class _RulesManagementPageState extends State<RulesManagementPage>
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => _RuleDetailSheet(rule: rule, isDark: isDark),
-    );
-  }
-}
-
-class _SummaryCard extends StatelessWidget {
-  final bool isDark;
-  final String label;
-  final int count;
-  final Color color;
-  final FaIconData icon;
-
-  const _SummaryCard({
-    required this.isDark,
-    required this.label,
-    required this.count,
-    required this.color,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF27272A) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
-        ],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          width: 32, height: 32,
-          decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10)),
-          child: Center(child: FaIcon(icon, size: 14, color: color)),
-        ),
-        const SizedBox(height: 10),
-        Text('$count',
-            style: TextStyle(
-                fontFamily: 'Inter',
-                fontWeight: FontWeight.w800,
-                fontSize: 22,
-                color: color)),
-        Text(label,
-            style: TextStyle(
-                fontFamily: 'Inter',
-                fontSize: 11,
-                color: isDark ? Colors.white54 : const Color(0xFF71717A),
-                fontWeight: FontWeight.w500),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-      ]),
     );
   }
 }

@@ -777,11 +777,14 @@ class _ThingDetailSheetState extends State<_ThingDetailSheet> {
     final itemName = _itemNameCtrls[channel.uid]?.text.trim() ?? '';
     if (itemName.isEmpty) return;
 
+    // Ambil sebelum await (hindari BuildContext lintas async gap).
+    final messenger = ScaffoldMessenger.of(context);
+
     setState(() => _linking[channel.uid] = true);
     try {
       await widget.mgmt.linkChannelToItem(
           channelUID: channel.uid, itemName: itemName);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      messenger.showSnackBar(SnackBar(
         content: Text('Channel di-link ke item "$itemName"'),
         backgroundColor: const Color(0xFF34C759),
         behavior: SnackBarBehavior.floating,
@@ -789,7 +792,7 @@ class _ThingDetailSheetState extends State<_ThingDetailSheet> {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      messenger.showSnackBar(SnackBar(
         content: Text('Gagal: $e'),
         backgroundColor: Colors.red,
         behavior: SnackBarBehavior.floating,
@@ -797,7 +800,7 @@ class _ThingDetailSheetState extends State<_ThingDetailSheet> {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ));
     } finally {
-      setState(() => _linking[channel.uid] = false);
+      if (mounted) setState(() => _linking[channel.uid] = false);
     }
   }
 

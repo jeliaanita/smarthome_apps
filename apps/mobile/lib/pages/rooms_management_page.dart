@@ -9,14 +9,6 @@ import '../../../../core/providers/role_provider.dart';
 import 'package:mobile/core/widget/access_denied_view.dart';
 import '../../../../core/theme/app_colors.dart';
 
-List<String> _asStringList(dynamic value) {
-  if (value is! List) return const [];
-  return value
-      .where((e) => e != null)
-      .map((e) => e.toString())
-      .toList();
-}
-
 class OHRoom {
   final String name;
   final String label;
@@ -822,7 +814,6 @@ class _RoomsManagementPageState extends State<RoomsManagementPage>
   }
 
   Widget _buildContent() {
-    final isDark       = Theme.of(context).brightness == Brightness.dark;
     final presentTypes = _allRooms.map((r) => r.locationType).toSet();
     return RefreshIndicator(
       onRefresh: _loadRooms,
@@ -891,7 +882,6 @@ class _RoomsManagementPageState extends State<RoomsManagementPage>
   Widget _buildSummaryCards() {
     final indoorCount  = _allRooms.where((r) =>
         !['garden', 'outdoor', 'terrace'].contains(r.locationType)).length;
-    final outdoorCount = _allRooms.length - indoorCount;
     final itemsTotal   = _allRooms.fold(0, (sum, r) => sum + r.itemCount);
     return Row(children: [
       Expanded(child: _SummaryCard(
@@ -909,7 +899,6 @@ class _RoomsManagementPageState extends State<RoomsManagementPage>
   }
 
   Widget _buildTypeChips(Set<String> presentTypes) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final allTypes = [
       'livingroom', 'bedroom', 'kitchen', 'bathroom',
       'garage', 'garden', 'corridor', 'office',

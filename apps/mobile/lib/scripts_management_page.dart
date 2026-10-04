@@ -54,10 +54,15 @@ class OHScript {
       final mime = cfg['type'] as String? ?? '';
       if (mime.contains('javascript')) {
         language = 'js';
-      } else if (mime.contains('python') || mime.contains('jython')) language = 'jython';
-      else if (mime.contains('groovy'))                            language = 'groovy';
-      else if (mime.contains('rules'))                             language = 'rules';
-      else if (mime.contains('ruby'))                              language = 'ruby';
+      } else if (mime.contains('python') || mime.contains('jython')) {
+        language = 'jython';
+      } else if (mime.contains('groovy')) {
+        language = 'groovy';
+      } else if (mime.contains('rules')) {
+        language = 'rules';
+      } else if (mime.contains('ruby')) {
+        language = 'ruby';
+      }
 
       script = cfg['script'] as String? ?? '';
     }

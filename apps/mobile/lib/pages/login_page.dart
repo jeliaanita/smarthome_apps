@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/gestures.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile/core/providers/installation_provider.dart';
@@ -39,65 +40,44 @@ class _LoginPageState extends State<LoginPage> {
     final email    = _emailController.text.trim();
     final password = _passwordController.text.trim();
     if (email.isEmpty || password.isEmpty) return;
- 
+
+    // Ambil dependensi SEBELUM await pertama supaya tidak memakai
+    // BuildContext setelah async gap.
+    final roleProvider         = context.read<RoleProvider>();
+    final installationProvider = context.read<InstallationProvider>();
+    final router               = GoRouter.of(context);
+
     setState(() => _isLoading = true);
     try {
       await AuthService.signInWithEmail(email: email, password: password);
-      if (mounted) {
-        await _createUserDocIfNeeded(); // jaga-jaga akun lama belum ada doc
-        await context.read<RoleProvider>().loadRole();
-        final installationProvider = context.read<InstallationProvider>();
-        await installationProvider.load();
+      if (!mounted) return;
 
+      await _createUserDocIfNeeded(); // jaga-jaga akun lama belum ada doc
+      await roleProvider.loadRole();
+      await installationProvider.load();
+      if (!mounted) return;
+
+      if (kDebugMode) {
         debugPrint('🏠 installationId = ${installationProvider.installationId}');
         debugPrint('🏠 config = ${installationProvider.config?.openhabUrl}');
-
-        if (installationProvider.config != null) {
-          await OpenHABController.instance
-              .initializeWithConfig(installationProvider.config!);
-        } else {
-          OpenHABController.instance.resetConnection();
-        }
-
-        context.go('/home');
       }
+
+      if (installationProvider.config != null) {
+        await OpenHABController.instance
+            .initializeWithConfig(installationProvider.config!);
+      } else {
+        OpenHABController.instance.resetConnection();
+      }
+      if (!mounted) return;
+
+      router.go('/home');
     } on Exception catch (e) {
       if (mounted) _showError(_friendlyError(e.toString()));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
- 
-  Future<void> _onGoogleSignIn() async {
-    setState(() => _isLoading = true);
-    try {
-      final result = await AuthService.signInWithGoogle();
-      if (result == null) return; // user cancel
-      if (mounted) {
-        await _createUserDocIfNeeded(); // jaga-jaga akun lama belum ada doc
-        await context.read<RoleProvider>().loadRole();
-        final installationProvider = context.read<InstallationProvider>();
-        await installationProvider.load();
 
-        debugPrint('🏠 installationId = ${installationProvider.installationId}');
-        debugPrint('🏠 config = ${installationProvider.config?.openhabUrl}');
-
-        if (installationProvider.config != null) {
-          await OpenHABController.instance
-              .initializeWithConfig(installationProvider.config!);
-        } else {
-          OpenHABController.instance.resetConnection();
-        }
-
-        context.go('/home');
-      }
-    } on Exception catch (e) {
-      if (mounted) _showError(_friendlyError(e.toString()));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
- 
   /// Buat document users/{uid} kalau belum ada (jaga-jaga akun yang
   /// signup sebelum sistem role/instalasi ini dipasang). Default role
   /// selalu "user" — TIDAK PERNAH menimpa akun yang sudah ada.
@@ -315,67 +295,67 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void _showForgotPasswordDialog() {
-  final ctrl = TextEditingController();
-  bool isSending = false;
+    final ctrl      = TextEditingController();
+    final messenger = ScaffoldMessenger.of(context);
+    bool isSending  = false;
 
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
-        title: const Text('Reset Password'),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(
-            hintText: 'Enter your email',
-            labelText: 'Email',
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (_, setDialogState) => AlertDialog(
+          title: const Text('Reset Password'),
+          content: TextField(
+            controller: ctrl,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              hintText: 'Enter your email',
+              labelText: 'Email',
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: isSending ? null : () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: isSending
-                ? null
-                : () async {
-                    if (ctrl.text.trim().isEmpty) return;
+          actions: [
+            TextButton(
+              onPressed: isSending ? null : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: isSending
+                  ? null
+                  : () async {
+                      final email = ctrl.text.trim();
+                      if (email.isEmpty) return;
 
-                    setDialogState(() => isSending = true);
-                    try {
-                      await AuthService.sendPasswordResetEmail(ctrl.text.trim());
-                      if (mounted) {
-                        Navigator.pop(dialogContext);
-                        ScaffoldMessenger.of(context).showSnackBar(
+                      setDialogState(() => isSending = true);
+                      try {
+                        await AuthService.sendPasswordResetEmail(email);
+                        if (dialogContext.mounted) Navigator.pop(dialogContext);
+                        messenger.showSnackBar(
                           SnackBar(
-                            content: Text(
-                              'Link reset dikirim ke ${ctrl.text.trim()}',
-                            ),
+                            content: Text('Link reset dikirim ke $email'),
                             backgroundColor: Colors.green[600],
                             behavior: SnackBarBehavior.floating,
                           ),
                         );
+                      } on Exception catch (e) {
+                        if (dialogContext.mounted) {
+                          setDialogState(() => isSending = false);
+                        }
+                        if (mounted) _showError(_friendlyError(e.toString()));
                       }
-                    } on Exception catch (e) {
-                      setDialogState(() => isSending = false);
-                      if (mounted) _showError(_friendlyError(e.toString()));
-                    }
-                  },
-            child: isSending
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Send'),
-          ),
-        ],
+                    },
+              child: isSending
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Send'),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildContinueButton() {
   final canContinue = _emailController.text.isNotEmpty &&
@@ -459,53 +439,4 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-}
-class _DividerWithText extends StatelessWidget {
-  final String text;
-  const _DividerWithText({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Expanded(child: Divider(color: AppColors.divider)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          child: Text(text,
-              style: AppTypography.bodySmall.copyWith(color: AppColors.textHint)),
-        ),
-        const Expanded(child: Divider(color: AppColors.divider)),
-      ],
-    );
-  }
-}
-class _SocialButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  final Widget icon;
-  final String label;
-
-  const _SocialButton({
-    required this.onPressed,
-    required this.icon,
-    required this.label,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      height: AppSpacing.buttonHeight,
-      child: OutlinedButton(
-        onPressed: onPressed,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            icon,
-            const SizedBox(width: AppSpacing.sm),
-            Text(label, style: AppTypography.buttonLabelDark),
-          ],
-        ),
-      ),
-    );
-  }
 }

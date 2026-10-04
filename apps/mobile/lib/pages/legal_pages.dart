@@ -11,8 +11,6 @@ class _LC {
   static const darkBg      = Color(0xFF18181B);
   static const darkSurface = Color(0xFF27272A);
   static const darkBorder  = Color(0xFF3F3F46);
-  static const darkText    = Colors.white;
-  static const darkMuted   = Color(0xFFFFFFFF); // will use opacity
 
   static List<BoxShadow> cardShadow(bool isDark) => [
     BoxShadow(

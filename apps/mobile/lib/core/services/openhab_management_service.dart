@@ -13,14 +13,15 @@ class OHBinding {
     required this.id,
     required this.name,
     required this.description,
-    this.installed = true,
+    this.installed = false,
   });
 
   factory OHBinding.fromJson(Map<String, dynamic> json) => OHBinding(
         id: json['id'] ?? '',
         name: json['name'] ?? json['id'] ?? '',
         description: json['description'] ?? '',
-        installed: json['installed'] as bool? ?? true,
+        // Default FALSE: binding yang tidak jelas statusnya jangan dianggap terpasang.
+        installed: json['installed'] as bool? ?? false,
       );
 }
 
@@ -259,10 +260,18 @@ Map<String, String> get _headers => {
     final res = await _client
         .post(
           Uri.parse('$_baseUrl/rest/discovery/bindings/$bindingId/scan'),
-          headers: _headers,
+          // Endpoint scan membalas text/plain (durasi scan dalam detik), jadi
+          // Accept: application/json ditolak openHAB dengan HTTP 406.
+          headers: {
+            'Accept': 'text/plain',
+            if (_apiToken != null && _apiToken!.isNotEmpty)
+              'Authorization': 'Bearer $_apiToken'
+            else if (_basicAuth != null)
+              'Authorization': _basicAuth!,
+          },
         )
         .timeout(_timeout);
-    if (res.statusCode != 200) {
+    if (res.statusCode != 200 && res.statusCode != 202 && res.statusCode != 204) {
       throw _err('startScan', res.statusCode, res.body);
     }
   }
@@ -597,7 +606,7 @@ Future<bool> uninstallAddon(String addonId) async {
 
   Exception _err(String method, int code, [String? body]) {
     return Exception(
-      '$method gagal (HTTP $code)${body != null ? ': $body' : ''}',
+      '$method gagal (HTTP $code)${body != null && body.trim().isNotEmpty ? ': $body' : ''}',
     );
   }
 

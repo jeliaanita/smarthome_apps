@@ -1,26 +1,24 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:http/http.dart' as http;
 import 'package:mobile/core/providers/installation_provider.dart';
-import 'package:mobile/core/controllers/openhab_controller.dart';
+import 'package:mobile/core/widget/data_logger.dart';
 import 'package:mobile/pages/floor_plan_page.dart';
 import 'package:mobile/pages/settings_page.dart';
 import '../../../../core/theme/app_colors.dart';
-import 'package:mobile/core/services/mqtt_service.dart';
+import 'package:mobile/core/models/power_meter_data.dart';
+import 'package:mobile/core/services/openhab_power_meter_service.dart';
 import 'energy_3phase_page.dart';
 
 /// Entry point publik — dipanggil dari nav yang sudah ada (`EnergyPage()`),
 /// tidak perlu diubah di tempat lain. Di dalamnya sekarang berupa halaman
 /// yang bisa digeser kiri-kanan antar tipe meter (1-phase, 3-phase, dst).
 ///
-/// Cara nambah phase/panel baru di masa depan: cukup tambah 1 entri baru
-/// di list `_phases` pada `_EnergyPageState` di bawah — tidak perlu ubah
-/// struktur lain.
+/// Tab dibuat otomatis dari meter yang ditemukan di openHAB — tidak ada
+/// daftar meter yang ditulis di kode.
 class EnergyPage extends StatefulWidget {
   const EnergyPage({super.key});
 
@@ -28,24 +26,89 @@ class EnergyPage extends StatefulWidget {
   State<EnergyPage> createState() => _EnergyPageState();
 }
 
+enum _PhaseKind { one, three }
+
+class _MeterRef {
+  final String uid;
+  final String label;
+  const _MeterRef(this.uid, this.label);
+}
+
 class _EnergyPageState extends State<EnergyPage> {
   final PageController _pageController = PageController();
-  int _currentPage = 0;
+  StreamSubscription? _meterSub;
+  String _tabKey = '';
+  int _phaseIndex = 0; // index di dalam _groups
 
-  // ── Daftar tab/phase yang bisa digeser. Tambah entri baru di sini kalau
-  // ── nanti ada panel/meter lain (mis. 3-phase panel kedua, dst).
-  late final List<_PhaseTab> _phases = [
-    _PhaseTab(label: '1 Phase', page: const _Energy1PhaseView()),
-    _PhaseTab(label: '3 Phase', page: const Energy3PhasePage()),
-  ];
+  // Meter hasil discovery openHAB, dikelompokkan per tipe.
+  List<SinglePhaseDevice> _singles = [];
+  List<PowerMeterDevice> _threes = [];
+  String? _selSingle; // thingUid meter 1 fasa yang sedang dibuka
+  String? _selThree; // thingUid meter 3 fasa yang sedang dibuka
+
+  /// Segmen switcher: hanya tipe yang punya meter.
+  List<_PhaseKind> get _groups => [
+        if (_singles.isNotEmpty) _PhaseKind.one,
+        if (_threes.isNotEmpty) _PhaseKind.three,
+      ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Konfigurasi openHAB diisi SEKALI di sini, lalu service jalan.
+    final config = context.read<InstallationProvider>().config;
+    OpenHabEndpoint.instance.configure(
+      baseUrl: config?.openhabUrl ?? '',
+      apiToken: config?.apiToken,
+      username: config?.username,
+      password: config?.password,
+    );
+    _start();
+  }
+
+  Future<void> _start() async {
+    final meters = OpenHabPowerMeterService.instance;
+    _meterSub = meters.stream.listen((_) => _refreshMeters());
+    await meters.start();
+    if (mounted) _refreshMeters();
+  }
+
+  void _refreshMeters() {
+    final svc = OpenHabPowerMeterService.instance;
+    final key = [
+      ...svc.singleDevices.map((d) => '1:${d.thingUid}'),
+      ...svc.devices.map((d) => '3:${d.thingUid}'),
+    ].join(',');
+    if (key == _tabKey || !mounted) return;
+    _tabKey = key;
+    setState(() {
+      _singles = svc.singleDevices;
+      _threes = svc.devices;
+      if (!_singles.any((d) => d.thingUid == _selSingle)) {
+        _selSingle = _singles.isEmpty ? null : _singles.first.thingUid;
+      }
+      if (!_threes.any((d) => d.thingUid == _selThree)) {
+        _selThree = _threes.isEmpty ? null : _threes.first.thingUid;
+      }
+      if (_phaseIndex >= _groups.length) {
+        _phaseIndex = 0;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pageController.hasClients) _pageController.jumpToPage(0);
+        });
+      }
+    });
+  }
 
   @override
   void dispose() {
+    _meterSub?.cancel();
+    OpenHabPowerMeterService.instance.stop();
     _pageController.dispose();
     super.dispose();
   }
 
   void _goToPage(int index) {
+    setState(() => _phaseIndex = index);
     _pageController.animateToPage(index,
         duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
   }
@@ -53,6 +116,7 @@ class _EnergyPageState extends State<EnergyPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final groups = _groups;
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF18181B) : const Color(0xFFF5F5F7),
       body: Column(
@@ -60,26 +124,42 @@ class _EnergyPageState extends State<EnergyPage> {
           SafeArea(
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-              child: _buildPhaseSwitcher(isDark),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: _buildPhaseSwitcher(isDark, groups),
             ),
           ),
           Expanded(
-            child: PageView(
-              controller: _pageController,
-              onPageChanged: (i) => setState(() => _currentPage = i),
-              children: _phases.map((p) => p.page).toList(),
-            ),
+            child: groups.isEmpty
+                ? Center(
+                    child: Text(
+                      'Belum ada power meter ditemukan di openHAB',
+                      style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 13,
+                          color: isDark ? Colors.white54 : Colors.black45),
+                    ),
+                  )
+                // Status bar sudah ditangani switcher di atas, jadi SafeArea
+                // di dalam tiap halaman tidak boleh menambah jarak lagi.
+                : MediaQuery.removePadding(
+                    context: context,
+                    removeTop: true,
+                    child: PageView(
+                      controller: _pageController,
+                      onPageChanged: (i) => setState(() => _phaseIndex = i),
+                      children: [for (final g in groups) _buildGroup(g, isDark)],
+                    ),
+                  ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPhaseSwitcher(bool isDark) {
-    // Kalau cuma ada 1 phase yang tersedia, switcher-nya disembunyikan
-    // otomatis (tidak ada gunanya nampilin switcher buat 1 pilihan).
-    if (_phases.length <= 1) return const SizedBox.shrink();
+  // ── Switcher utama: 1 Phase | 3 Phase ───────────────────────────────────
+  Widget _buildPhaseSwitcher(bool isDark, List<_PhaseKind> groups) {
+    // Cuma ada 1 tipe meter -> switcher tidak perlu.
+    if (groups.length <= 1) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -89,21 +169,23 @@ class _EnergyPageState extends State<EnergyPage> {
             blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Row(
-        children: List.generate(_phases.length, (i) {
-          final selected = i == _currentPage;
+        children: List.generate(groups.length, (i) {
+          final selected = i == _phaseIndex;
           return Expanded(
             child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: () => _goToPage(i),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 9),
                 decoration: BoxDecoration(
                   color: selected ? AppColors.primary : Colors.transparent,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
-                child: Text(_phases[i].label,
-                    style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, fontSize: 12,
+                child: Text(groups[i] == _PhaseKind.one ? '1 Phase' : '3 Phase',
+                    maxLines: 1,
+                    style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, fontSize: 13,
                         color: selected ? Colors.white
                             : (isDark ? Colors.white60 : Colors.black54))),
               ),
@@ -113,19 +195,83 @@ class _EnergyPageState extends State<EnergyPage> {
       ),
     );
   }
-}
 
-class _PhaseTab {
-  final String label;
-  final Widget page;
-  const _PhaseTab({required this.label, required this.page});
+  // ── Isi satu tipe: (pemilih meter kalau > 1) + halaman meter terpilih ───
+  Widget _buildGroup(_PhaseKind kind, bool isDark) {
+    final isOne = kind == _PhaseKind.one;
+    final refs = isOne
+        ? _singles.map((d) => _MeterRef(d.thingUid, d.label)).toList()
+        : _threes.map((d) => _MeterRef(d.thingUid, d.label)).toList();
+    final selected = isOne ? _selSingle : _selThree;
+
+    Widget page;
+    if (isOne) {
+      final d = _singles.firstWhere((d) => d.thingUid == selected);
+      page = _Energy1PhaseView(key: ValueKey(d.thingUid), device: d);
+    } else {
+      final d = _threes.firstWhere((d) => d.thingUid == selected);
+      page = Energy3PhasePage(key: ValueKey(d.thingUid), device: d);
+    }
+
+    return Column(
+      children: [
+        // Pemilih meter hanya muncul kalau tipe ini punya lebih dari 1 meter.
+        if (refs.length > 1)
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              scrollDirection: Axis.horizontal,
+              itemCount: refs.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final r = refs[i];
+                final sel = r.uid == selected;
+                return GestureDetector(
+                  onTap: () => setState(() {
+                    if (isOne) {
+                      _selSingle = r.uid;
+                    } else {
+                      _selThree = r.uid;
+                    }
+                  }),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: sel
+                          ? AppColors.primary.withValues(alpha: 0.15)
+                          : (isDark ? const Color(0xFF27272A) : Colors.white),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: sel ? AppColors.primary : Colors.transparent),
+                    ),
+                    child: Text(r.label,
+                        maxLines: 1,
+                        style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            color: sel
+                                ? AppColors.primary
+                                : (isDark ? Colors.white60 : Colors.black54))),
+                  ),
+                );
+              },
+            ),
+          ),
+        Expanded(child: page),
+      ],
+    );
+  }
 }
 
 /// Konten asli halaman Energy 1-Phase (sebelumnya bernama `EnergyPage`).
 /// Semua logic/UI di bawah ini TIDAK diubah sama sekali — cuma nama class-nya
 /// yang di-private-kan karena sekarang dibungkus oleh `EnergyPage` di atas.
 class _Energy1PhaseView extends StatefulWidget {
-  const _Energy1PhaseView();
+  final SinglePhaseDevice device;
+  const _Energy1PhaseView({super.key, required this.device});
 
   @override
   State<_Energy1PhaseView> createState() => _Energy1PhaseViewState();
@@ -134,17 +280,9 @@ class _Energy1PhaseView extends StatefulWidget {
 class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
   String _selectedPeriod = 'Today';
   PowerMeterData _data = const PowerMeterData();
-  bool _mqttConnected = false;
+  bool _serverReachable = false; // REST openHAB terjangkau
   StreamSubscription? _dataSub;
   Timer? _staleCheckTimer;
-  Map<String, double> _ohItems = {};
-  Map<String, String> _ohStrings = {};
-
-  _HistoryPeriod _historyPeriod = _HistoryPeriod.hour;
-  List<_EnergyPoint> _historyPoints = [];
-  bool _historyLoading = false;
-  String? _historyError;
-  bool _historyStale = false;
 
   /// Kapan data live terakhir kali diperbarui (dari MQTT push ATAU dari
   /// polling openHAB items) — dipakai untuk label "Last update" dan
@@ -158,10 +296,10 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
 
   /// Status keseluruhan data live, dalam satu sumber kebenaran — dipakai
   /// konsisten di semua tempat (appbar, badge, dll) alih-alih tiap tempat
-  /// nyimpulin sendiri dari _mqttConnected/_data.deviceOnline secara
+  /// nyimpulin sendiri dari _serverReachable/_data.deviceOnline secara
   /// terpisah (itu penyebab sebelumnya statusnya kelihatan berantakan).
   _LiveStatus get _liveStatus {
-    if (!_mqttConnected) return _LiveStatus.offline;
+    if (!_serverReachable) return _LiveStatus.offline;
     if (!_data.deviceOnline) return _LiveStatus.offline;
     if (_isStale) return _LiveStatus.stale;
     return _LiveStatus.online;
@@ -218,15 +356,15 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
   }
 
  
-  double get _voltage     => _ohItems['pow_test_mqtt_Voltage']        ?? _data.volt;
-  double get _powerW      => _ohItems['pow_test_mqtt_Power']          ?? _data.powerKw * 1000;
+  double get _voltage     => _data.volt;
+  double get _powerW      => _data.powerKw * 1000;
   double get _powerKw     => _powerW / 1000;
-  double get _ampere      => _ohItems['pow_test_mqtt_Current']        ?? _data.amp;
-  double get _energyToday => _ohItems['pow_test_mqtt_Energy_Today']   ?? _data.energyToday;
-  double get _energyTotal => _ohItems['pow_test_mqtt_Energy_Total']   ?? _data.energyTotal;
-  double get _energyYest  => _ohItems['pow_test_mqtt_Energy_Yesterday'] ?? _data.energyYesterday;
-  double get _frequency   => _ohItems['pow_test_mqtt_Frequency']      ?? _data.freq;
-  double get _pf          => _ohItems['pow_test_mqtt_Power_Factor']   ?? _data.pf;
+  double get _ampere      => _data.amp;
+  double get _energyToday => _data.energyToday;
+  double get _energyTotal => _data.energyTotal;
+  double get _energyYest  => _data.energyYesterday;
+  double get _frequency   => _data.freq;
+  double get _pf          => _data.pf;
 
   // ── Alarm thresholds (sumber 1-phase, standar rumah tangga) ─────────────
   static const double _voltMin    = 200;
@@ -239,10 +377,10 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
   List<_EnergyAlarm> _computeAlarms() {
     final alarms = <_EnergyAlarm>[];
 
-    if (!_mqttConnected) {
+    if (!_serverReachable) {
       alarms.add(const _EnergyAlarm(
         severity: _AlarmSeverity.critical,
-        message: 'MQTT terputus — data mungkin tidak real-time',
+        message: 'Server openHAB tidak terjangkau — data mungkin tidak real-time',
       ));
     }
     if (!_data.deviceOnline) {
@@ -251,7 +389,7 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
         message: 'Perangkat meter offline',
       ));
     }
-    if (_mqttConnected && _data.deviceOnline && _isStale) {
+    if (_serverReachable && _data.deviceOnline && _isStale) {
       alarms.add(_EnergyAlarm(
         severity: _AlarmSeverity.warning,
         message: 'Data belum diperbarui sejak $_lastUpdateLabel — kemungkinan '
@@ -259,7 +397,7 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
       ));
     }
 
-    if (_mqttConnected && _data.deviceOnline) {
+    if (_serverReachable && _data.deviceOnline) {
       if (_voltage > 0 && (_voltage < _voltMin || _voltage > _voltMax)) {
         alarms.add(_EnergyAlarm(
           severity: _AlarmSeverity.warning,
@@ -296,20 +434,23 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
   @override
   void initState() {
     super.initState();
-    final mqtt = MqttService.instance;
-    _data = mqtt.lastData;
-    _mqttConnected = mqtt.isConnected;
-    mqtt.connect();
-    _loadOpenHABItems();
-    _loadHistory();
-    _dataSub = mqtt.stream.listen((data) {
-      if (mounted) {
-        setState(() {
-        _data = data;
-        _mqttConnected = mqtt.isConnected;
-        _lastUpdate = DateTime.now();
+    final svc = OpenHabPowerMeterService.instance;
+    final uid = widget.device.thingUid;
+    final snap = svc.singleSnapshots[uid];
+    if (snap != null) {
+      _data = snap.data;
+      _serverReachable = true;
+      _lastUpdate = snap.lastChange;
+    }
+    _dataSub = svc.singleStream.listen((all) {
+      final s = all[uid];
+      if (s == null || !mounted) return;
+      setState(() {
+        _data = s.data;
+        _serverReachable = true;
+        // Waktu NILAI terakhir berubah, bukan waktu polling.
+        _lastUpdate = s.lastChange;
       });
-      }
     });
     // Re-evaluasi status stale secara berkala walau tidak ada data baru
     // masuk — tanpa ini, badge "Data tidak diperbarui" tidak akan pernah
@@ -357,7 +498,7 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
                     const SizedBox(height: 12),
                     _buildCapacityCard(context),
                     const SizedBox(height: 12),
-                    _buildHistoryCard(context),
+                    _buildDataLogger(context),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -369,229 +510,6 @@ class _Energy1PhaseViewState extends State<_Energy1PhaseView> {
       ),
     );
   }
-  Future<void> _loadOpenHABItems() async {
-  try {
-    final ctrl = OpenHABController.instance;
-    if (!ctrl.isConnected) return;
-
-    final headers = _buildAuthHeaders();
-
-    final uri = Uri.parse('${ctrl.serverUrl}/rest/items?fields=name,state,type');
-    final res = await http
-        .get(uri, headers: headers)
-        .timeout(const Duration(seconds: 10));
-
-    if (res.statusCode == 200 && mounted) {
-      final list = jsonDecode(res.body) as List;
-      final numMap = <String, double>{};
-      final strMap = <String, String>{}; // ⬅ tambah ini
-
-      for (final item in list) {
-        final name  = item['name'] as String? ?? '';
-        final state = item['state'] as String? ?? '';
-        
-        final value = double.tryParse(state);
-        if (value != null) {
-          numMap[name] = value;
-        } else {
-          strMap[name] = state; // ⬅ simpan string juga
-        }
-      }
-
-      setState(() {
-        _ohItems   = numMap;
-        _ohStrings = strMap; // ⬅ update state
-        _lastUpdate = DateTime.now();
-      });
-    }
-  } catch (e) {
-    debugPrint('loadOpenHABItems error: $e');
-  }
-}
-
-// Helper untuk ambil nilai item by name (case-insensitive substring)
-double? _getItemValue(String keyword) {
-  final key = _ohItems.keys.firstWhere(
-    (k) => k.toLowerCase().contains(keyword.toLowerCase()),
-    orElse: () => '',
-  );
-  return key.isNotEmpty ? _ohItems[key] : null;
-}
-
-// ── Riwayat Energy (openHAB Persistence API) ────────────────────────────────
-
-Map<String, String> _buildAuthHeaders() {
-  final config = context.read<InstallationProvider>().config;
-  final headers = <String, String>{'Accept': 'application/json'};
-  if (config?.apiToken != null && config!.apiToken!.isNotEmpty) {
-    headers['Authorization'] = 'Bearer ${config.apiToken}';
-  } else if (config?.username != null && config?.password != null) {
-    final enc =
-        base64Encode(utf8.encode('${config!.username}:${config.password}'));
-    headers['Authorization'] = 'Basic $enc';
-  }
-  return headers;
-}
-
-Future<void> _loadHistory() async {
-  final ctrl = OpenHABController.instance;
-  if (!ctrl.isConnected) return;
-  if (!mounted) return;
-
-  setState(() {
-    _historyLoading = true;
-    _historyError = null;
-  });
-
-  try {
-    final now = DateTime.now();
-    late DateTime start;
-    late String itemName;
-    switch (_historyPeriod) {
-      case _HistoryPeriod.hour:
-        start = now.subtract(const Duration(hours: 24));
-        itemName = 'pow_test_mqtt_Power';
-        break;
-      case _HistoryPeriod.day:
-        start = now.subtract(const Duration(days: 8));
-        itemName = 'pow_test_mqtt_Energy_Total';
-        break;
-      case _HistoryPeriod.month:
-        start = now.subtract(const Duration(days: 396));
-        itemName = 'pow_test_mqtt_Energy_Total';
-        break;
-    }
-
-    final uri = Uri.parse('${ctrl.serverUrl}/rest/persistence/items/$itemName')
-        .replace(queryParameters: {
-      'starttime': start.toUtc().toIso8601String(),
-      'endtime': now.toUtc().toIso8601String(),
-    });
-
-    final res = await http
-        .get(uri, headers: _buildAuthHeaders())
-        .timeout(const Duration(seconds: 15));
-
-    if (res.statusCode != 200) {
-      throw Exception('HTTP ${res.statusCode}');
-    }
-
-    final json = jsonDecode(res.body) as Map<String, dynamic>;
-    final raw = (json['data'] as List<dynamic>? ?? [])
-        .map((e) {
-          final m = e as Map<String, dynamic>;
-          final t = m['time'];
-          final v = double.tryParse('${m['state']}');
-          if (t == null || v == null) return null;
-          return _RawPoint(
-            time: DateTime.fromMillisecondsSinceEpoch((t as num).toInt()),
-            value: v,
-          );
-        })
-        .whereType<_RawPoint>()
-        .toList()
-      ..sort((a, b) => a.time.compareTo(b.time));
-
-    List<_EnergyPoint> points;
-    switch (_historyPeriod) {
-      case _HistoryPeriod.hour:
-        points = _aggregateHourly(raw);
-        break;
-      case _HistoryPeriod.day:
-        points = _aggregateDelta(raw, byMonth: false);
-        break;
-      case _HistoryPeriod.month:
-        points = _aggregateDelta(raw, byMonth: true);
-        break;
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _historyPoints = points;
-      _historyLoading = false;
-      _historyStale = raw.isNotEmpty &&
-          now.difference(raw.last.time) > const Duration(hours: 2);
-    });
-  } catch (e) {
-    if (!mounted) return;
-    setState(() {
-      _historyLoading = false;
-      _historyPoints = [];
-      _historyError =
-          'Gagal memuat histori: ${e.toString().replaceFirst('Exception: ', '')}';
-    });
-  }
-}
-
-List<_EnergyPoint> _aggregateHourly(List<_RawPoint> raw) {
-  if (raw.isEmpty) return [];
-  final buckets = <DateTime, List<double>>{};
-  for (final p in raw) {
-    final key = DateTime(p.time.year, p.time.month, p.time.day, p.time.hour);
-    buckets.putIfAbsent(key, () => []).add(p.value);
-  }
-  final keys = buckets.keys.toList()..sort();
-  return keys.map((k) {
-    final vals = buckets[k]!;
-    final avgW = vals.reduce((a, b) => a + b) / vals.length;
-    return _EnergyPoint(time: k, value: avgW / 1000); // Watt -> kW
-  }).toList();
-}
-
-/// Ambil pembacaan terakhir per hari/bulan lalu hitung selisihnya —
-/// cara standar menghitung konsumsi dari meter kumulatif (Energy_Total).
-List<_EnergyPoint> _aggregateDelta(List<_RawPoint> raw, {required bool byMonth}) {
-  if (raw.isEmpty) return [];
-  final lastPerBucket = <DateTime, double>{};
-  for (final p in raw) {
-    final key = byMonth
-        ? DateTime(p.time.year, p.time.month)
-        : DateTime(p.time.year, p.time.month, p.time.day);
-    lastPerBucket[key] = p.value; // raw sudah urut asc, jadi ini otomatis nilai terakhir
-  }
-  final keys = lastPerBucket.keys.toList()..sort();
-  final result = <_EnergyPoint>[];
-  for (var i = 1; i < keys.length; i++) {
-    final delta = lastPerBucket[keys[i]]! - lastPerBucket[keys[i - 1]]!;
-    result.add(_EnergyPoint(time: keys[i], value: delta < 0 ? 0 : delta));
-  }
-  return result;
-}
-
-String _historyUnit() => _historyPeriod == _HistoryPeriod.hour ? 'kW' : 'kWh';
-
-String _formatPointLabel(DateTime t) {
-  switch (_historyPeriod) {
-    case _HistoryPeriod.hour:
-      return '${t.hour.toString().padLeft(2, '0')}:00';
-    case _HistoryPeriod.day:
-      return '${t.day.toString().padLeft(2, '0')}/${t.month.toString().padLeft(2, '0')}';
-    case _HistoryPeriod.month:
-      const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
-      return months[t.month - 1];
-  }
-}
-
-String _lastUpdatedLabel() {
-  if (_historyPoints.isEmpty) return '-';
-  final t = _historyPoints.last.time;
-  String two(int n) => n.toString().padLeft(2, '0');
-  return '${two(t.day)}/${two(t.month)}/${t.year} ${two(t.hour)}:${two(t.minute)}';
-}
-
-double _historyMaxValue() {
-  if (_historyPoints.isEmpty) return 0;
-  return _historyPoints.map((p) => p.value).reduce((a, b) => a > b ? a : b);
-}
-
-String _formatAxisValue(double v) {
-  if (v <= 0) return '0';
-  return v >= 100 ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
-}
-
-TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSize: 9,
-    color: isDark ? Colors.white38 : const Color(0xFF94A3B8));
-
 
   // ── Alarm Banner ───────────────────────────────────────────────────────────
 
@@ -652,23 +570,29 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
   Widget _buildAppBar(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final textColor = isDark ? Colors.white : const Color(0xCC18181B);
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        GestureDetector(
-          onTap: () => Navigator.pop(context),
-          child: SizedBox(width: 24, height: 24,
-              child: Center(child: FaIcon(FontAwesomeIcons.arrowLeft,
-                  size: 18, color: textColor))),
+    // Sama persis dengan header halaman 3 fasa: tombol back, NAMA METER, badge status.
+    return Row(children: [
+      GestureDetector(
+        onTap: () => Navigator.maybePop(context),
+        child: Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF27272A) : Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8)],
+          ),
+          child: Icon(Icons.arrow_back_ios_new, size: 16, color: textColor),
         ),
-        Expanded(child: Text('Energy', textAlign: TextAlign.center,
-            style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600,
-                fontSize: 20, height: 1.34, color: textColor))),
-        SizedBox(width: 24, height: 24,
-            child: Center(child: FaIcon(FontAwesomeIcons.gear,
-                size: 18, color: textColor))),
-      ]),
-      const SizedBox(height: 8),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(widget.device.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700,
+                fontSize: 16, color: textColor)),
+      ),
+      const SizedBox(width: 8),
       _buildStatusBadge(context),
     ]);
   }
@@ -682,7 +606,7 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final color = _liveStatusColor;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: color.withValues(alpha: isDark ? 0.18 : 0.10),
         borderRadius: BorderRadius.circular(20),
@@ -822,11 +746,6 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
                 color: isDark ? Colors.white38 : const Color(0xFF94A3B8))),
       ],
     ]));
-  }
-
-  Widget _buildStatDivider(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(width: 1, color: isDark ? const Color(0xFF3F3F46) : const Color(0xFFE3E3E3));
   }
 
   Widget _buildEnergyFlow(BuildContext context) {
@@ -1057,7 +976,7 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
                 fontSize: 18,
                 color: isDark ? Colors.white : const Color(0xCC18181B))),
         GestureDetector(
-          onTap: _loadOpenHABItems,
+          onTap: () => OpenHabPowerMeterService.instance.refresh(),
           child: Row(children: [
             Text(
               '${_energyTotal.toStringAsFixed(2)} / ${maxCapacity.toStringAsFixed(0)} kWh',
@@ -1138,8 +1057,8 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
         _buildCapacityDivider(context),
         _buildCapacityStat(
         'Status',
-        _ohStrings['pow_test_mqtt_Status'] ?? _data.status,
-        (_ohStrings['pow_test_mqtt_Status'] ?? _data.status) == 'ON'
+        _data.status,
+        (_data.status) == 'ON'
             ? const Color(0xFF34C759)
             : const Color(0xFFF31260),
         context),
@@ -1190,174 +1109,36 @@ TextStyle _yAxisLabelStyle(bool isDark) => TextStyle(fontFamily: 'Inter', fontSi
         color: isDark ? const Color(0xFF3F3F46) : const Color(0xFFE3E3E3));
   }
 
-  Widget _buildHistoryCard(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  // ── Data Logger (riwayat dari openHAB Persistence) ──────────────────────
+  static const _loggerSeries = <LoggerSeries>[
+    LoggerSeries(id: 'power', label: 'Daya Aktif', unit: 'kW', scale: 0.001,
+        icon: Icons.bolt_rounded, color: Color(0xFFFFA500)),
+    LoggerSeries(id: 'energyTotal', label: 'Energi', unit: 'kWh',
+        kind: LoggerKind.cumulative, icon: Icons.speed_rounded, color: Color(0xFF34C759)),
+    LoggerSeries(id: 'voltage', label: 'Tegangan', unit: 'V', decimals: 1,
+        icon: Icons.electrical_services_rounded, color: Color(0xFFEF4444)),
+    LoggerSeries(id: 'current', label: 'Arus', unit: 'A',
+        icon: Icons.waves_rounded, color: Color(0xFF3B82F6)),
+    LoggerSeries(id: 'pf', label: 'Faktor Daya', unit: '%', scale: 100,
+        decimals: 1, icon: Icons.percent_rounded, color: Color(0xFF0088FF)),
+    LoggerSeries(id: 'frequency', label: 'Frekuensi', unit: 'Hz',
+        icon: Icons.graphic_eq_rounded, color: Color(0xFF34C759)),
+    LoggerSeries(id: 'status', label: 'Status Meter', kind: LoggerKind.binary,
+        icon: Icons.power_settings_new_rounded, activeLabel: 'ON', inactiveLabel: 'OFF'),
+  ];
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF27272A) : Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
-              blurRadius: 12, offset: const Offset(0, 4)),
-        ],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Riwayat Energy',
-              style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600,
-                  fontSize: 18, color: isDark ? Colors.white : const Color(0xCC18181B))),
-          if (_historyStale)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                  color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10)),
-              child: const Text('Data stale',
-                  style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600,
-                      fontSize: 10, color: Color(0xFFF59E0B))),
-            ),
-        ]),
-        const SizedBox(height: 12),
-        _buildHistoryPeriodTabs(isDark),
-        const SizedBox(height: 16),
-        if (_historyLoading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 40),
-            child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
-          )
-        else if (_historyError != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Column(children: [
-              Icon(Icons.error_outline_rounded, size: 28,
-                  color: isDark ? Colors.white38 : Colors.grey.shade400),
-              const SizedBox(height: 8),
-              Text(_historyError!, textAlign: TextAlign.center,
-                  style: TextStyle(fontFamily: 'Inter', fontSize: 12,
-                      color: isDark ? Colors.white54 : const Color(0xFF71717A))),
-              const SizedBox(height: 10),
-              GestureDetector(
-                onTap: _loadHistory,
-                child: const Text('Coba lagi',
-                    style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600,
-                        fontSize: 12, color: Color(0xFFFFA500))),
-              ),
-            ]),
-          )
-        else if (_historyPoints.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 30),
-            child: Column(children: [
-              Icon(Icons.bar_chart_rounded, size: 28,
-                  color: isDark ? Colors.white38 : Colors.grey.shade400),
-              const SizedBox(height: 8),
-              Text('Belum ada data histori untuk periode ini',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontFamily: 'Inter', fontSize: 12,
-                      color: isDark ? Colors.white54 : const Color(0xFF71717A))),
-            ]),
-          )
-        else ...[
-          SizedBox(
-            height: 150,
-            width: double.infinity,
-            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              SizedBox(
-                width: 42,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(_formatAxisValue(_historyMaxValue()), style: _yAxisLabelStyle(isDark)),
-                    Text(_formatAxisValue(_historyMaxValue() / 2), style: _yAxisLabelStyle(isDark)),
-                    Text('0', style: _yAxisLabelStyle(isDark)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: CustomPaint(
-                  size: Size.infinite,
-                  painter: _HistoryBarPainter(
-                    points: _historyPoints,
-                    isDark: isDark,
-                    barColor: const Color(0xFFFFA500),
-                  ),
-                ),
-              ),
-            ]),
-          ),
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.only(left: 50),
-            child: _buildHistoryAxisLabels(isDark),
-          ),
-          const SizedBox(height: 10),
-          Text('Satuan: ${_historyUnit()}  •  diperbarui ${_lastUpdatedLabel()}',
-              style: TextStyle(fontFamily: 'Inter', fontSize: 10,
-                  color: isDark ? Colors.white38 : const Color(0xFF94A3B8))),
-        ],
-      ]),
-    );
-  }
+  // id series = kunci logis (power, voltage, ...) -> Item milik meter INI.
+  late final LoggerFetcher _loggerFetcher = openHabLoggerFetcher(
+    baseUrl: () => OpenHabEndpoint.instance.baseUrl,
+    headers: () => OpenHabEndpoint.instance.headers,
+    itemNameOf: (s) => widget.device.keyToItem[s.id],
+  );
 
-  Widget _buildHistoryPeriodTabs(bool isDark) {
-    final options = <MapEntry<_HistoryPeriod, String>>[
-      const MapEntry(_HistoryPeriod.hour, 'Jam'),
-      const MapEntry(_HistoryPeriod.day, 'Harian'),
-      const MapEntry(_HistoryPeriod.month, 'Bulanan'),
-    ];
-    return Row(
-      children: options.map((o) {
-        final selected = _historyPeriod == o.key;
-        return Expanded(
-          child: GestureDetector(
-            onTap: selected
-                ? null
-                : () {
-                    setState(() => _historyPeriod = o.key);
-                    _loadHistory();
-                  },
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              decoration: BoxDecoration(
-                color: selected
-                    ? const Color(0xFFFFA500).withValues(alpha: 0.15)
-                    : (isDark ? const Color(0xFF3F3F46) : const Color(0xFFF5F5F7)),
-                borderRadius: BorderRadius.circular(12),
-                border: selected ? Border.all(color: const Color(0xFFFFA500)) : null,
-              ),
-              child: Text(o.value, textAlign: TextAlign.center,
-                  style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                      color: selected
-                          ? const Color(0xFFFFA500)
-                          : (isDark ? Colors.white54 : const Color(0xFF71717A)))),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildHistoryAxisLabels(bool isDark) {
-    final n = _historyPoints.length;
-    final step = n <= 6 ? 1 : (n / 6).ceil();
-    return Row(
-      children: List.generate(n, (i) {
-        final show = i % step == 0 || i == n - 1;
-        return Expanded(
-          child: Text(
-            show ? _formatPointLabel(_historyPoints[i].time) : '',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontFamily: 'Inter', fontSize: 9,
-                color: isDark ? Colors.white38 : const Color(0xFF94A3B8)),
-          ),
-        );
-      }),
+  Widget _buildDataLogger(BuildContext context) {
+    return DataLoggerCard(
+      title: 'Data Logger',
+      series: _loggerSeries,
+      fetcher: _loggerFetcher,
     );
   }
 
@@ -1521,8 +1302,6 @@ class _FlowLinePainter extends CustomPainter {
 
 enum ArrowDir { down, up, right, left }
 
-enum _HistoryPeriod { hour, day, month }
-
 enum _LiveStatus { online, stale, offline }
 
 enum _AlarmSeverity { warning, critical }
@@ -1531,66 +1310,6 @@ class _EnergyAlarm {
   final _AlarmSeverity severity;
   final String message;
   const _EnergyAlarm({required this.severity, required this.message});
-}
-
-class _RawPoint {
-  final DateTime time;
-  final double value;
-  const _RawPoint({required this.time, required this.value});
-}
-
-class _EnergyPoint {
-  final DateTime time;
-  final double value;
-  const _EnergyPoint({required this.time, required this.value});
-}
-
-class _HistoryBarPainter extends CustomPainter {
-  final List<_EnergyPoint> points;
-  final bool isDark;
-  final Color barColor;
-
-  const _HistoryBarPainter({
-    required this.points,
-    required this.isDark,
-    required this.barColor,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (points.isEmpty) return;
-
-    final maxVal = points
-        .map((p) => p.value)
-        .fold<double>(0, (a, b) => b > a ? b : a);
-    final safeMax = maxVal <= 0 ? 1.0 : maxVal;
-
-    final gridPaint = Paint()
-      ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.06)
-      ..strokeWidth = 1;
-    for (var i = 0; i <= 3; i++) {
-      final y = size.height - (size.height / 3) * i;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final barWidth = size.width / points.length;
-    final barPaint = Paint()..color = barColor;
-    for (var i = 0; i < points.length; i++) {
-      final h = (points[i].value / safeMax) * (size.height - 4);
-      final left = i * barWidth + barWidth * 0.2;
-      final right = (i + 1) * barWidth - barWidth * 0.2;
-      final rect = Rect.fromLTRB(left, size.height - h, right, size.height);
-      canvas.drawRRect(
-        RRect.fromRectAndCorners(rect,
-            topLeft: const Radius.circular(4), topRight: const Radius.circular(4)),
-        barPaint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _HistoryBarPainter old) =>
-      old.points != points || old.isDark != isDark;
 }
 
 class _NavItem {

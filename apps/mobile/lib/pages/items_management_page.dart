@@ -11,6 +11,7 @@ import 'package:mobile/core/providers/role_provider.dart';
 import 'package:mobile/pages/add_item_page.dart';
 import 'package:mobile/pages/edit_item_page.dart';
 import 'package:mobile/core/utils/responsive_utils.dart';
+import 'package:mobile/core/widget/video_player_dialog.dart';
 import '../../../../core/theme/app_colors.dart';
 
 
@@ -335,7 +336,6 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF18181B) : const Color(0xFFF5F5F7),
@@ -349,7 +349,6 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
   }
 
   AppBar _buildAppBar(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
     final isAdmin = context.watch<RoleProvider>().isAdmin;
 
@@ -408,7 +407,7 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
 
   Widget _buildError() {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -439,7 +438,7 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
             ),
           ],
         ),
-      ),
+      )),
     );
   }
 
@@ -471,7 +470,7 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
             ),
           ),
           _filteredItems.isEmpty
-              ? SliverFillRemaining(child: _buildEmpty(context))
+              ? SliverFillRemaining(hasScrollBody: false, child: _buildEmpty(context))
               : SliverPadding(
                   padding: EdgeInsets.fromLTRB(
                       ResponsiveUtils.horizontalPadding(context), 0,
@@ -714,13 +713,18 @@ class _ItemsManagementPageState extends State<ItemsManagementPage>
             color: isDark ? Colors.white : const Color(0xCC18181B),
           ),
         ),
-        const Spacer(),
-        Text(
-          'Geser untuk hapus',
-          style: TextStyle(
-            fontFamily: 'Inter',
-            fontSize: 11,
-            color: isDark ? Colors.white38 : Colors.grey.shade400,
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Geser untuk hapus',
+            textAlign: TextAlign.end,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 11,
+              color: isDark ? Colors.white38 : Colors.grey.shade400,
+            ),
           ),
         ),
       ],
@@ -883,7 +887,17 @@ class _ItemCardState extends State<_ItemCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              // LayoutBuilder: lebar kontrol di kanan dibatasi relatif terhadap
+              // lebar kartu, supaya label di tengah selalu kebagian ruang dan
+              // state yang panjang (String/Image/Location) tidak membuat overflow.
+              LayoutBuilder(builder: (context, c) {
+              // 44 ikon + 12 jarak + 39 tombol edit = 95 lebar tetap
+              final maxTrailing = ((c.maxWidth - 95) * 0.5).clamp(56.0, 260.0);
+              Widget cap(Widget w) => ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxTrailing),
+                    child: w,
+                  );
+              return Row(
                 children: [
                   Container(
                     width: 44, height: 44,
@@ -904,6 +918,8 @@ class _ItemCardState extends State<_ItemCard> {
                           widget.item.label.isNotEmpty
                               ? widget.item.label
                               : widget.item.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: 'Inter',
                             fontWeight: FontWeight.w600,
@@ -963,16 +979,17 @@ class _ItemCardState extends State<_ItemCard> {
                           size: 15, color: AppColors.textMuted),
                     ),
                   ),
-                  if (widget.item.isSwitch) _buildSwitchControl(),
-                  if (widget.item.isColor) _buildColorSwatch(context, isDark),
+                  if (widget.item.isSwitch) cap(_buildSwitchControl()),
+                  if (widget.item.isColor) cap(_buildColorSwatch(context, isDark)),
                   if (!widget.item.isSwitch && widget.item.isImage && !widget.item.isCamera)
-                    _buildImageThumb(context, isDark),
+                    cap(_buildImageThumb(context, isDark)),
                   if (!widget.item.isSwitch && !widget.item.isDimmer &&
                       !widget.item.isColor && !widget.item.isImage &&
                       !widget.item.isCamera)
-                    _buildStateBadge(isDark),
+                    cap(_buildStateBadge(isDark)),
                 ],
-              ),
+              );
+              }),
               if (!widget.item.isSwitch && widget.item.isCamera) ...[
                 const SizedBox(height: 12),
                 _buildCameraWidget(context, isDark),
@@ -1137,6 +1154,7 @@ class _ItemCardState extends State<_ItemCard> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: isDark ? const Color(0xFF27272A) : Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
@@ -1155,7 +1173,7 @@ class _ItemCardState extends State<_ItemCard> {
                 left: 20, right: 20, top: 20,
                 bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
               ),
-              child: Column(
+              child: SingleChildScrollView(child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1171,15 +1189,19 @@ class _ItemCardState extends State<_ItemCard> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Text(
-                        widget.item.label.isNotEmpty
-                            ? widget.item.label
-                            : widget.item.name,
-                        style: TextStyle(
-                          fontFamily: 'Inter',
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                          color: isDark ? Colors.white : const Color(0xFF18181B),
+                      Expanded(
+                        child: Text(
+                          widget.item.label.isNotEmpty
+                              ? widget.item.label
+                              : widget.item.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                            color: isDark ? Colors.white : const Color(0xFF18181B),
+                          ),
                         ),
                       ),
                     ],
@@ -1223,7 +1245,7 @@ class _ItemCardState extends State<_ItemCard> {
                   ),
                   const SizedBox(height: 8),
                 ],
-              ),
+              )),
             );
           },
         );
@@ -1305,7 +1327,7 @@ class _ItemCardState extends State<_ItemCard> {
                   ),
                 ],
               ),
-              ClipRRect(
+              Flexible(child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: bytes != null
                     ? Image.memory(
@@ -1315,7 +1337,7 @@ class _ItemCardState extends State<_ItemCard> {
                             isDark, 'Gagal memuat snapshot'),
                       )
                     : _imageViewerFallback(isDark, 'Belum ada snapshot'),
-              ),
+              )),
             ],
           ),
         ),
@@ -1363,11 +1385,13 @@ class _ItemCardState extends State<_ItemCard> {
         child: Stack(
           children: [
             Positioned(
-              left: 14, top: 12,
+              left: 14, right: 14, top: 12,
               child: Text(
                 widget.item.label.isNotEmpty
                     ? widget.item.label
                     : widget.item.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontFamily: 'Inter',
                   fontWeight: FontWeight.w700,
@@ -1405,13 +1429,13 @@ class _ItemCardState extends State<_ItemCard> {
       );
       return;
     }
-    // TODO(video-player): buka dialog player video_player di sini
-    // (lihat _VideoPlayerDialog di home_page.dart / floor_plan_page.dart
-    // untuk pola yang sama — mulai poster, tap play baru inisialisasi).
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('URL video: $state'),
-        behavior: SnackBarBehavior.floating,
+    final item = widget.item;
+    showDialog(
+      context: context,
+      builder: (_) => VideoPlayerDialog(
+        label: item.label.isNotEmpty ? item.label : item.name,
+        videoUrl: state,
+        httpHeaders: OpenHABController.instance.authHeaders,
       ),
     );
   }
@@ -1505,14 +1529,15 @@ class _ItemCardState extends State<_ItemCard> {
         ),
     ];
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        for (var i = 0; i < buttons.length; i++) ...[
-          if (i > 0) const SizedBox(width: 12),
-          buttons[i],
-        ],
-      ],
+    return SizedBox(
+      width: double.infinity,
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 8,
+        children: buttons,
+      ),
     );
   }
   Widget _buildRollershutterControl(bool isDark) {
@@ -1543,14 +1568,15 @@ class _ItemCardState extends State<_ItemCard> {
         ),
     ];
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        for (var i = 0; i < buttons.length; i++) ...[
-          if (i > 0) const SizedBox(width: 10),
-          buttons[i],
-        ],
-      ],
+    return SizedBox(
+      width: double.infinity,
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 8,
+        children: buttons,
+      ),
     );
   }
 }

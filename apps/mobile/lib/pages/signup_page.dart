@@ -59,6 +59,11 @@ class _SignUpPageState extends State<SignUpPage> {
       return;
     }
 
+    // Ambil dependensi SEBELUM await pertama (hindari BuildContext async gap).
+    final roleProvider         = context.read<RoleProvider>();
+    final installationProvider = context.read<InstallationProvider>();
+    final router               = GoRouter.of(context);
+
     setState(() => _isLoading = true);
     try {
       await AuthService.signUpWithEmail(
@@ -66,20 +71,18 @@ class _SignUpPageState extends State<SignUpPage> {
         email:    _emailController.text.trim(),
         password: password,
       );
+      if (!mounted) return;
 
-      if (mounted) {
-        await _createUserDocIfNeeded();
-        await context.read<RoleProvider>().loadRole();
+      await _createUserDocIfNeeded();
+      await roleProvider.loadRole();
+      await installationProvider.load();
+      if (!mounted) return;
 
-        final installationProvider = context.read<InstallationProvider>();
-        await installationProvider.load();
+      // User baru pasti belum ada installationId (admin belum assign),
+      // jadi controller-nya di-reset, bukan initializeWithConfig.
+      OpenHABController.instance.resetConnection();
 
-        // User baru pasti belum ada installationId (admin belum assign),
-        // jadi controller-nya di-reset, bukan initializeWithConfig.
-        OpenHABController.instance.resetConnection();
-
-        context.go('/home');
-      }
+      router.go('/home');
     } on Exception catch (e) {
       if (mounted) _showError(_friendlyError(e.toString()));
     } finally {

@@ -34,6 +34,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
     bool isCreatingNew = false;
     bool isSaving = false;
     _newInstallationCtrl.clear();
+    final messenger = ScaffoldMessenger.of(context);
 
     showModalBottomSheet(
       context: context,
@@ -130,7 +131,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
                           if (isCreatingNew &&
                               (targetInstallation == null ||
                                   targetInstallation.isEmpty)) {
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            messenger.showSnackBar(
                               const SnackBar(
                                   content: Text('ID instalasi tidak boleh kosong')),
                             );
@@ -144,25 +145,23 @@ class _UserManagementPageState extends State<UserManagementPage> {
                               role: selectedRole,
                               installationId: targetInstallation,
                             );
-                            if (mounted) {
-                              Navigator.pop(ctx);
-                              await _loadInstallationIds(); // refresh dropdown
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(isCreatingNew
-                                      ? 'Instalasi "$targetInstallation" dibuat. '
-                                        'Isi server URL lewat Hub & Connectivity.'
-                                      : 'User berhasil diupdate'),
-                                ),
-                              );
-                            }
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            await _loadInstallationIds(); // refresh dropdown
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(isCreatingNew
+                                    ? 'Instalasi "$targetInstallation" dibuat. '
+                                      'Isi server URL lewat Hub & Connectivity.'
+                                    : 'User berhasil diupdate'),
+                              ),
+                            );
                           } catch (e) {
-                            setSheetState(() => isSaving = false);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Gagal: $e')),
-                              );
+                            if (ctx.mounted) {
+                              setSheetState(() => isSaving = false);
                             }
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Gagal: $e')),
+                            );
                           }
                         },
                   child: isSaving

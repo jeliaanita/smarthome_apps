@@ -121,6 +121,7 @@ class _AddItemPageState extends State<AddItemPage> {
         tags:       _selectedTags,
       );
       if (success && mounted) {
+        _ctrl.refresh(); // sinkronkan Items/Groups (mis. unit AC baru) di semua halaman
         _showSuccessSnack();
         await Future.delayed(const Duration(milliseconds: 600));
         if (mounted) Navigator.pop(context, true);

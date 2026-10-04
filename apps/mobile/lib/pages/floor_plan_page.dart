@@ -14,8 +14,13 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/controllers/openhab_controller.dart';
 import '../../../../core/models/openhab_item.dart';
 import 'package:mobile/core/services/openhab_management_service.dart' show OHThing;
-import 'package:mobile/core/services/mqtt_service.dart';
+import 'package:mobile/core/models/power_meter_data.dart';
+import 'package:mobile/core/widget/camera_widgets.dart';
+import 'package:mobile/core/services/openhab_power_meter_service.dart';
 import 'package:mobile/core/utils/responsive_utils.dart';
+import 'package:mobile/core/providers/role_provider.dart'; // [MAPPING]
+import 'package:mobile/pages/map_thing_to_room_page.dart'; // [MAPPING]
+import 'package:mobile/core/widget/ac_unit_widgets.dart';
 
 class _NavItem {
   final FaIconData icon;
@@ -30,7 +35,8 @@ class FloorPlanPage extends StatefulWidget {
   State<FloorPlanPage> createState() => _FloorPlanPageState();
 }
 
-class _FloorPlanPageState extends State<FloorPlanPage> {
+class _FloorPlanPageState extends State<FloorPlanPage>
+    with WidgetsBindingObserver {
   final _ctrl = OpenHABController.instance;
   int _selectedModeIndex = 0;
   String _selectedCameraGroup = 'Semua';
@@ -40,15 +46,36 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
   String? _runningSceneUid;
   int _selectedLocationIdx = 0;
 
-  static const _acTempItem = 'AC_Temperature';
-  static const _acPowerItem = 'AC_Power';
-  PowerMeterData _mqttData = const PowerMeterData();
   StreamSubscription? _dataSub;
   Timer? _statusRefreshTimer;
   Map<String, double> _ohItems = {};
 
+  // ── Data power meter dari OpenHabPowerMeterService (sumber yang sama
+  // dengan energy_page.dart). Dijumlahkan dari semua meter 1-fasa. ──
+  final _meterSvc = OpenHabPowerMeterService.instance;
+
+  Iterable<PowerMeterData> get _meters =>
+      _meterSvc.singleSnapshots.values.map((s) => s.data);
+
+  double get _powerKw => _meters.fold(0.0, (sum, m) => sum + m.powerKw);
+
+  void _startMeterService() {
+    final config = context.read<InstallationProvider>().config;
+    OpenHabEndpoint.instance.configure(
+      baseUrl: config?.openhabUrl ?? '',
+      apiToken: config?.apiToken,
+      username: config?.username,
+      password: config?.password,
+    );
+    _meterSvc.start();
+    _dataSub = _meterSvc.singleStream.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
   double get _energyToday =>
-      _ohItems['pow_test_mqtt_Energy_Today'] ?? _mqttData.energyToday;
+      _ohItems['pow_test_mqtt_Energy_Today'] ??
+      _meters.fold(0.0, (sum, m) => sum + m.energyToday);
 
   List<double> _weeklyData = [];
   List<String> _weeklyLabels = [];
@@ -57,6 +84,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ctrl.addListener(_onCtrlUpdate);
     // _ctrl.initialize() DIHAPUS — controller sudah diinisialisasi
     // dari login_page.dart sesuai akun yang login.
@@ -64,12 +92,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
     _loadOpenHABItems();
     _loadWeeklyConsumption();
 
-    final mqtt = MqttService.instance;
-    _mqttData = mqtt.lastData;
-    mqtt.connect();
-    _dataSub = mqtt.stream.listen((data) {
-      if (mounted) setState(() => _mqttData = data);
-    });
+    _startMeterService();
 
     // Refresh berkala status perangkat, supaya tetap real-time terutama
     // untuk penggunaan di iPad/wall panel yang menyala terus tanpa
@@ -194,7 +217,19 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshAll();
+  }
+
+  Future<void> _refreshAll() async {
+    if (!mounted) return;
+    await _ctrl.loadItems();
+    await _loadOpenHABItems();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ctrl.removeListener(_onCtrlUpdate);
     _dataSub?.cancel();
     _statusRefreshTimer?.cancel();
@@ -244,7 +279,10 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
         Expanded(
           child: SafeArea(
             bottom: false,
+            child: RefreshIndicator(
+            onRefresh: _refreshAll,
             child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: EdgeInsets.symmetric(
                   horizontal: ResponsiveUtils.horizontalPadding(context)),
               child: ResponsiveUtils.constrainWidth(context, Column(
@@ -262,7 +300,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                   _buildDevicesHeader(context),
                   const SizedBox(height: 8),
                   _buildDevicesGrid(context),
-                  if (_ctrl.hasCameraThings) ...[
+                  if (_camerasForLocation.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     _buildCameraSection(context),
                   ],
@@ -273,6 +311,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                   const SizedBox(height: 16),
                 ],
               )),
+            ),
             ),
           ),
         ),
@@ -305,7 +344,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                   height: 1.34,
                   color: textColor))),
       GestureDetector(
-        onTap: () => _ctrl.loadItems(),
+        onTap: _refreshAll,
         child: Stack(children: [
           SizedBox(
               width: 24,
@@ -625,7 +664,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
               context),
           _buildStatDivider(context),
           _buildStatItem('Consumption',
-              '${_mqttData.powerKw.toStringAsFixed(2)} kW',
+              '${_powerKw.toStringAsFixed(2)} kW',
               const Color(0xFFF31260), context),
           _buildStatDivider(context),
           _buildStatItem(
@@ -861,16 +900,13 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
   Widget _buildDevicesHeader(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final locItems = _getLocItems();
-    final activeCount = locItems.where((i) {
-      if (i.isSwitch) return i.isOn;
-      if (i.isDimmer) return (i.numericValue ?? 0) > 0;
-      if (i.type == 'Player') return i.state?.toUpperCase() == 'PLAY';
-      if (i.isContact) return i.state?.toUpperCase() == 'OPEN';
-      if (i.isRollershutter) return (i.numericValue ?? 100) < 100;
-      if (i.isColor) return (i.hsbColor?.value ?? 0) > 0;
-      return false;
-    }).length;
+    final groups = _groupByEquipment(_displayItems);
+    final acUnits = _locAcUnits;
+    final totalDevices = groups.length + acUnits.length;
+    final activeCount = groups.values
+            .where((its) => its.any(_floorItemIsActive))
+            .length +
+        acUnits.where((u) => _ctrl.getItem(u.powerItem)?.isOn ?? false).length;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -882,7 +918,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
                   color: cs.onSurface)),
-          Text('$activeCount dari ${locItems.length} aktif',
+          Text('$activeCount dari $totalDevices perangkat aktif',
               style: TextStyle(
                   fontFamily: 'Inter',
                   fontWeight: FontWeight.w500,
@@ -891,29 +927,68 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                       ? Colors.white54
                       : const Color(0xFF71717A))),
         ]),
-        GestureDetector(
-          onTap: () => _ctrl.loadItems(),
-          child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFA500).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          // [MAPPING] Tambah device ke ruangan ini (admin saja)
+          if (context.watch<RoleProvider>().isAdmin) ...[
+            _buildAddDeviceButton(),
+            const SizedBox(width: 8),
+          ],
+          GestureDetector(
+            onTap: () => _ctrl.loadItems(),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFA500).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(children: const [
+                FaIcon(FontAwesomeIcons.arrowsRotate,
+                    size: 11, color: Color(0xFFFFA500)),
+                SizedBox(width: 6),
+                Text('Refresh',
+                    style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFFFA500))),
+              ]),
             ),
-            child: Row(children: const [
-              FaIcon(FontAwesomeIcons.arrowsRotate,
-                  size: 11, color: Color(0xFFFFA500)),
-              SizedBox(width: 6),
-              Text('Refresh',
-                  style: TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFFFA500))),
-            ]),
           ),
-        ),
+        ]),
       ],
+    );
+  }
+
+  // [MAPPING] Pilih Thing -> wizard, ruangan aktif sudah terpilih.
+  Future<void> _addDeviceToCurrentRoom() async {
+    final saved = await openThingMapper(
+      context,
+      locationName: _locationRawName.isNotEmpty ? _locationRawName : null,
+    );
+    if (saved == true && mounted) await _ctrl.loadItems();
+  }
+
+  Widget _buildAddDeviceButton() {
+    return GestureDetector(
+      onTap: _addDeviceToCurrentRoom,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFA500),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(children: const [
+          Icon(Icons.add, size: 14, color: Colors.white),
+          SizedBox(width: 4),
+          Text('Tambah',
+              style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white)),
+        ]),
+      ),
     );
   }
 
@@ -923,7 +998,8 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
   /// biar konsisten sama filter lokasi lain di halaman ini.
   Widget _buildCameraSection(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cameras = _ctrl.cameraThings;
+    final cameras = _camerasForLocation;
+    if (cameras.isEmpty) return const SizedBox.shrink();
 
     final groups = <String>{
       for (final t in cameras) _cameraGroupLabel(t),
@@ -935,7 +1011,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
       _selectedCameraGroup = 'Semua';
     }
 
-    final visibleCameras = _selectedCameraGroup == 'Semua'
+    final visibleCameras = (_locationRawName.isNotEmpty || _selectedCameraGroup == 'Semua')
         ? cameras
         : cameras.where((t) => _cameraGroupLabel(t) == _selectedCameraGroup).toList();
 
@@ -951,13 +1027,14 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
                     color: isDark ? Colors.white : const Color(0xFF18181B))),
-            if (groups.length > 1) _buildCameraGroupChip(groups),
+            if (_locationRawName.isEmpty && groups.length > 1)
+              _buildCameraGroupChip(groups),
           ],
         ),
         const SizedBox(height: 8),
         ...visibleCameras.map((thing) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _FloorCameraThingCard(thing: thing, ctrl: _ctrl),
+              child: CameraThingCard(thing: thing, ctrl: _ctrl),
             )),
       ],
     );
@@ -1109,6 +1186,117 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
         : _ctrl.items;
   }
 
+  // ── Tampilan device ringkas (sama dengan Home) ─────────────────────
+  bool _isSupportedItem(OpenHABItem i) =>
+      i.isSwitch || i.isDimmer || i.type == 'Player' || i.isColor ||
+      i.isContact || i.isRollershutter || i.isImage || i.isString;
+
+  /// Item yang sudah tampil di kartu/detail AC — disembunyikan dari grid.
+  Set<String> get _acItemNames {
+    final names = <String>{};
+    for (final u in _ctrl.acUnits) {
+      for (final n in [
+        u.powerItem, u.modeItem, u.fanItem, u.setTempItem,
+        u.roomTempItem, u.roomHumidityItem, u.statusItem,
+        u.stateModeItem, u.stateFanItem,
+      ]) {
+        if (n != null) names.add(n);
+      }
+    }
+    return names;
+  }
+
+  /// Hanya Item yang benar-benar anggota ruangan terpilih (termasuk
+  /// sub-lokasinya), tanpa Item AC & tipe yang tidak didukung.
+  List<OpenHABItem> get _displayItems {
+    final acNames = _acItemNames;
+    return _getLocItems()
+        .where((i) => _isSupportedItem(i) && !acNames.contains(i.name))
+        .toList();
+  }
+
+  List<OHAcUnit> get _locAcUnits {
+    final units = _ctrl.acUnits;
+    if (_locationRawName.isEmpty) return units;
+    final names = _getLocItems().map((i) => i.name).toSet();
+    return units.where((u) => names.contains(u.powerItem)).toList();
+  }
+
+  Map<String, List<OpenHABItem>> _groupByEquipment(List<OpenHABItem> items) {
+    final map = <String, List<OpenHABItem>>{};
+    for (final i in items) {
+      final key = i.roomGuess.isNotEmpty ? i.roomGuess : 'Lainnya';
+      map.putIfAbsent(key, () => []).add(i);
+    }
+    return map;
+  }
+
+  static const _iconPriority = [
+    'ac', 'tv', 'lightbulb', 'speaker', 'fan', 'camera', 'door', 'temperature',
+  ];
+
+  FaIconData _groupIcon(List<OpenHABItem> items) {
+    for (final k in _iconPriority) {
+      if (items.any((i) => i.iconKey == k)) return _floorIconForKey(k);
+    }
+    return _floorIconForKey(items.first.iconKey);
+  }
+
+  /// Detail satu perangkat: HANYA fungsi milik ruangan ini.
+  void _showEquipmentDetail(BuildContext context, String key) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollController) => ListenableBuilder(
+          listenable: _ctrl,
+          builder: (ctx, __) {
+            final items = _displayItems.where((i) =>
+                (i.roomGuess.isNotEmpty ? i.roomGuess : 'Lainnya') == key).toList();
+            final active = items.where(_floorItemIsActive).length;
+            return DetailSheetShell(
+              scrollController: scrollController,
+              title: key,
+              subtitle: '${items.length} fungsi · $active aktif',
+              children: [
+                ...buildEquipmentSections(
+                  ctx,
+                  items,
+                  (item) => CompactItemRow(
+                    item: item,
+                    icon: _floorIconForKey(item.iconKey),
+                    active: _floorItemIsActive(item),
+                    stateLabel: _floorStateLabel(item),
+                    onTap: () => _openFloorItemControl(ctx, _ctrl, item),
+                    onToggle: () => _ctrl.toggleItem(item.name),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TechInfoSection(items: items),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  bool _cameraInLocation(OHThing t, String locName) {
+    final names = _ctrl.getItemsForLocation(locName).map((i) => i.name).toSet();
+    return t.channels.any((c) => c.linkedItems.any(names.contains));
+  }
+
+  List<OHThing> get _camerasForLocation {
+    final all = _ctrl.cameraThings;
+    if (_locationRawName.isEmpty) return all;
+    return all.where((t) => _cameraInLocation(t, _locationRawName)).toList();
+  }
+
   Widget _buildDevicesGrid(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1131,39 +1319,54 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
       );
     }
 
-    final locItems = _getLocItems();
-    if (locItems.isEmpty) return _buildEmptyDevices(context);
+    final acUnits = _locAcUnits;
+    final groups = _groupByEquipment(_displayItems).entries.toList();
+    if (acUnits.isEmpty && groups.isEmpty) return _buildEmptyDevices(context);
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // Kolom menyesuaikan lebar layar — tetap 2 kolom di HP (desain
-        // tidak berubah), lebih banyak kolom di tablet/wall panel.
-        // Dipakai ResponsiveUtils supaya breakpoint-nya SAMA dengan
-        // halaman lain (Home, dsb), bukan angka lokal yang beda-beda.
-        final crossAxisCount = ResponsiveUtils.gridColumns(context);
-        final isWide = crossAxisCount > 2;
+    final crossAxisCount = ResponsiveUtils.gridColumns(context);
+    final isWide = crossAxisCount > 2;
 
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 0.95,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // AC: kartu lebar penuh (sama seperti Home), di atas grid.
+        for (final unit in acUnits) ...[
+          AcUnitSummaryCard(unit: unit, ctrl: _ctrl),
+          const SizedBox(height: 12),
+        ],
+        if (groups.isNotEmpty)
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.1,
+            ),
+            itemCount: groups.length,
+            itemBuilder: (context, i) {
+              final entry = groups[i];
+              if (entry.value.length == 1) {
+                final item = entry.value.first;
+                return _FloorPlanDeviceCard(
+                  item: item,
+                  ctrl: _ctrl,
+                  onToggle: () => _ctrl.toggleItem(item.name),
+                  isWide: isWide,
+                );
+              }
+              return EquipmentSummaryCard(
+                name: entry.key,
+                items: entry.value,
+                icon: _groupIcon(entry.value),
+                isActive: _floorItemIsActive,
+                onToggle: (it) => _ctrl.toggleItem(it.name),
+                onOpen: () => _showEquipmentDetail(context, entry.key),
+              );
+            },
           ),
-          itemCount: locItems.length,
-          itemBuilder: (context, i) {
-            final item = locItems[i];
-            return _FloorPlanDeviceCard(
-              item: item,
-              ctrl: _ctrl,
-              onToggle: () => _ctrl.toggleItem(item.name),
-              isWide: isWide,
-            );
-          },
-        );
-      },
+      ],
     );
   }
 
@@ -1197,7 +1400,7 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                     : const Color(0xFF71717A))),
         const SizedBox(height: 4),
         Text(
-            'Pastikan item sudah ditambahkan ke room\ndi openHAB semantic model.',
+            'Pasang perangkat ke ruangan ini langsung dari aplikasi.',
             textAlign: TextAlign.center,
             style: TextStyle(
                 fontFamily: 'Inter',
@@ -1206,6 +1409,25 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                     ? Colors.white38
                     : const Color(0xFF71717A),
                 height: 1.5)),
+        // [MAPPING] CTA menggantikan arahan "buka openHAB"
+        if (context.watch<RoleProvider>().isAdmin) ...[
+          const SizedBox(height: 14),
+          ElevatedButton.icon(
+            onPressed: _addDeviceToCurrentRoom,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFA500),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+            ),
+            icon: const Icon(Icons.add, size: 16, color: Colors.white),
+            label: const Text('Tambah Device',
+                style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white)),
+          ),
+        ],
       ]),
     );
   }
@@ -1221,12 +1443,19 @@ class _FloorPlanPageState extends State<FloorPlanPage> {
                 fontWeight: FontWeight.w700,
                 fontSize: 18,
                 color: cs.onSurface)),
-        const Text('See All',
-            style: TextStyle(
-                fontFamily: 'Inter',
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-                color: Color(0xFF71717A))),
+        GestureDetector(
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const EnergyPage())),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            child: Text('See All',
+                style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    color: Color(0xFFFFA500))),
+          ),
+        ),
       ],
     );
   }
@@ -1574,55 +1803,8 @@ class _FloorPlanDeviceCard extends StatelessWidget {
     return false;
   }
 
-  void _onTap(BuildContext context) {
-    if (item.isDimmer) {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _FloorDimmerSheet(item: item, ctrl: ctrl),
-      );
-    } else if (item.type == 'Player') {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _FloorPlayerSheet(item: item, ctrl: ctrl),
-      );
-    } else if (item.isRollershutter) {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _FloorRollershutterSheet(item: item, ctrl: ctrl),
-      );
-    } else if (item.isColor) {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _FloorColorSheet(item: item, ctrl: ctrl),
-      );
-    } else if (item.isString) {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        builder: (_) => item.looksLikeRemoteButton
-            ? _RemoteControlSheet(item: item, ctrl: ctrl)
-            : _StringCommandSheet(item: item, ctrl: ctrl),
-      );
-    } else if (item.isSwitch) {
-      onToggle();
-    } else if (item.isCamera) {
-      showDialog(
-        context: context,
-        builder: (_) => _FloorCameraPlayerDialog(item: item, ctrl: ctrl),
-      );
-    } else if (item.isImage) {
-      showDialog(
-        context: context,
-        builder: (_) => _FloorCameraViewerDialog(item: item, ctrl: ctrl),
-      );
-    }
-    // Contact: sensor read-only, sengaja tidak ada aksi tap.
-  }
+  void _onTap(BuildContext context) =>
+      _openFloorItemControl(context, ctrl, item, onToggle: onToggle);
 
   @override
   Widget build(BuildContext context) {
@@ -2319,75 +2501,6 @@ class _FloorColorSheetState extends State<_FloorColorSheet> {
 /// Kartu kamera untuk Thing hasil auto-discovery (binding IP Camera) —
 /// sumbernya Thing + URL yang dikonstruksi langsung dari _serverUrl,
 /// BUKAN dari state Item manapun.
-class _FloorCameraThingCard extends StatelessWidget {
-  final OHThing thing;
-  final OpenHABController ctrl;
-  const _FloorCameraThingCard({required this.thing, required this.ctrl});
-
-  @override
-  Widget build(BuildContext context) {
-    final label = thing.label.isNotEmpty ? thing.label : thing.uid;
-    final isOnline = thing.isOnline;
-    return GestureDetector(
-      onTap: () => showDialog(
-        context: context,
-        builder: (_) => _FloorVideoPlayerDialog(
-          label: label,
-          videoUrl: ctrl.cameraHlsUrl(thing),
-          onBeforePlay: () => ctrl.startCameraStream(thing),
-          httpHeaders: ctrl.authHeaders,
-        ),
-      ),
-      child: Container(
-        width: double.infinity,
-        height: 160,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: const Color(0xFF0A0A0A),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              left: 14, top: 12,
-              child: Text(label,
-                  style: const TextStyle(
-                      fontFamily: 'Inter',
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                      color: Colors.white)),
-            ),
-            if (!isOnline)
-              Positioned(
-                right: 12, top: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text('Offline',
-                      style: TextStyle(
-                          fontFamily: 'Inter', fontSize: 10,
-                          fontWeight: FontWeight.w700, color: Colors.white)),
-                ),
-              ),
-            Center(
-              child: Container(
-                width: 48, height: 48,
-                decoration: const BoxDecoration(
-                    color: Color(0xFFE4E4E7), shape: BoxShape.circle),
-                child: const Icon(Icons.play_arrow_rounded,
-                    color: Colors.black, size: 26),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Wrapper: item Camera (category "Camera", type String/Image) langsung
 /// pakai state-nya sendiri sebagai URL video.
 class _FloorCameraPlayerDialog extends StatelessWidget {
@@ -2477,11 +2590,12 @@ class _FloorVideoPlayerDialog extends StatefulWidget {
   final Future<bool> Function()? onBeforePlay;
   final Map<String, String> httpHeaders;
   const _FloorVideoPlayerDialog({
-    required this.label,
-    required this.videoUrl,
-    this.onBeforePlay,
-    this.httpHeaders = const {},
-  });
+  required this.label,
+  required this.videoUrl,
+  // ignore: unused_element_parameter
+  this.onBeforePlay,
+  this.httpHeaders = const {},
+});
 
   @override
   State<_FloorVideoPlayerDialog> createState() => _FloorVideoPlayerDialogState();
@@ -3341,5 +3455,111 @@ extension _IterableExt<T> on Iterable<T> {
   T? get firstOrNull {
     final it = iterator;
     return it.moveNext() ? it.current : null;
+  }
+}
+
+void _openFloorItemControl(BuildContext context, OpenHABController ctrl, OpenHABItem item,
+    {VoidCallback? onToggle}) {
+  if (item.isDimmer) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FloorDimmerSheet(item: item, ctrl: ctrl),
+    );
+  } else if (item.type == 'Player') {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FloorPlayerSheet(item: item, ctrl: ctrl),
+    );
+  } else if (item.isRollershutter) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FloorRollershutterSheet(item: item, ctrl: ctrl),
+    );
+  } else if (item.isColor) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FloorColorSheet(item: item, ctrl: ctrl),
+    );
+  } else if (item.isString) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => item.looksLikeRemoteButton
+          ? _RemoteControlSheet(item: item, ctrl: ctrl)
+          : _StringCommandSheet(item: item, ctrl: ctrl),
+    );
+  } else if (item.isSwitch) {
+    (onToggle ?? () => ctrl.toggleItem(item.name))();
+  } else if (item.isCamera) {
+    showDialog(
+      context: context,
+      builder: (_) => _FloorCameraPlayerDialog(item: item, ctrl: ctrl),
+    );
+  } else if (item.isImage) {
+    showDialog(
+      context: context,
+      builder: (_) => _FloorCameraViewerDialog(item: item, ctrl: ctrl),
+    );
+  }
+  // Contact: sensor read-only, sengaja tidak ada aksi tap.
+}
+
+bool _floorItemIsActive(OpenHABItem item) {
+  if (item.isSwitch) return item.isOn;
+  if (item.isDimmer) return (item.numericValue ?? 0) > 0;
+  if (item.type == 'Player') return item.state?.toUpperCase() == 'PLAY';
+  if (item.isContact) return item.state?.toUpperCase() == 'OPEN';
+  if (item.isRollershutter) return (item.numericValue ?? 100) < 100;
+  if (item.isColor) return (item.hsbColor?.value ?? 0) > 0;
+  return false;
+}
+
+String _floorStateLabel(OpenHABItem item) {
+  if (item.type == 'Player') {
+    switch (item.state?.toUpperCase()) {
+      case 'PLAY':  return 'Playing';
+      case 'PAUSE': return 'Paused';
+      default:      return 'Idle';
+    }
+  }
+  if (item.isSwitch) return item.isOn ? 'On' : 'Off';
+  if (item.isDimmer || item.isRollershutter) {
+    final v = item.numericValue;
+    return v != null ? '${v.toInt()}%' : '-';
+  }
+  if (item.isContact) {
+    return item.state?.toUpperCase() == 'OPEN' ? 'Terbuka' : 'Tertutup';
+  }
+  if (item.isColor) return item.hsbColor != null ? 'Warna' : '-';
+  if (item.isImage) return item.imageBytes != null ? 'Live' : 'No signal';
+  if (item.isString) {
+    final st = item.state;
+    if (st == null || st.isEmpty || st == 'NULL' || st == 'UNDEF') return 'Command';
+    return st.length > 10 ? '${st.substring(0, 10)}…' : st;
+  }
+  return item.state ?? '-';
+}
+
+FaIconData _floorIconForKey(String? key) {
+  switch (key) {
+    case 'lightbulb':   return FontAwesomeIcons.lightbulb;
+    case 'ac':          return FontAwesomeIcons.wind;
+    case 'temperature': return FontAwesomeIcons.temperatureHalf;
+    case 'tv':          return FontAwesomeIcons.tv;
+    case 'speaker':     return FontAwesomeIcons.volumeHigh;
+    case 'door':        return FontAwesomeIcons.doorOpen;
+    case 'fan':         return FontAwesomeIcons.fan;
+    case 'camera':      return FontAwesomeIcons.camera;
+    case 'dimmer':      return FontAwesomeIcons.sliders;
+    case 'color':       return FontAwesomeIcons.palette;
+    case 'remote':      return FontAwesomeIcons.gamepad;
+    case 'command':     return FontAwesomeIcons.terminal;
+    case 'player':      return FontAwesomeIcons.play;
+    default:            return FontAwesomeIcons.powerOff;
   }
 }

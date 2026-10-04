@@ -20,7 +20,9 @@ import '../../../../core/theme/app_typography.dart';
 import '../core/controllers/openhab_controller.dart';
 import '../core/models/openhab_item.dart';
 import 'package:mobile/core/services/openhab_management_service.dart' show OHThing;
-import 'package:mobile/core/services/mqtt_service.dart';
+import 'package:mobile/core/widget/camera_widgets.dart';
+import 'package:mobile/core/models/power_meter_data.dart';
+import 'package:mobile/core/services/openhab_power_meter_service.dart';
 import 'package:mobile/core/utils/responsive_utils.dart';
 import 'package:mobile/core/services/app_notification_service.dart';
 
@@ -31,14 +33,24 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _ctrl.isConnected) {
+      _ctrl.loadItems();
+    }
+  }
+
+  Future<void> _refreshAll() async {
+    if (!mounted) return;
+    await _ctrl.loadItems();
+  }
+
 
   final _ctrl = OpenHABController.instance;
   WeatherData? _weatherData;
 
   StreamSubscription? _dataSub;
-  PowerMeterData _energyData = const PowerMeterData();
-  bool _mqttConnected = false;
 
   int _selectedTab  = 0;
   int _selectedRoom = 0;
@@ -75,16 +87,50 @@ String get _greeting {
 // Ambil dari _ctrl (item openHAB, di-update real-time lewat SSE),
 // bukan lewat polling HTTP manual terpisah — mencegah dua sumber data
 // yang bisa nggak sinkron untuk item MQTT yang sama.
+  // ── Data power meter dari OpenHabPowerMeterService (sumber yang sama
+  // dengan energy_page.dart). Dijumlahkan dari semua meter 1-fasa. ──
+  final _meterSvc = OpenHabPowerMeterService.instance;
+
+  Iterable<PowerMeterData> get _meters =>
+      _meterSvc.singleSnapshots.values.map((s) => s.data);
+
+  double get _powerKw => _meters.fold(0.0, (sum, m) => sum + m.powerKw);
+
+  double get _volt {
+    for (final m in _meters) {
+      if (m.deviceOnline && m.volt > 0) return m.volt;
+    }
+    return 0;
+  }
+
+  bool get _deviceOnline => _meters.any((m) => m.deviceOnline);
+
+  void _startMeterService() {
+    final config = context.read<InstallationProvider>().config;
+    OpenHabEndpoint.instance.configure(
+      baseUrl: config?.openhabUrl ?? '',
+      apiToken: config?.apiToken,
+      username: config?.username,
+      password: config?.password,
+    );
+    _meterSvc.start();
+    _dataSub = _meterSvc.singleStream.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
 double get _energyToday =>
-    _ctrl.getItem(_itemEnergyToday)?.numericValue ?? _energyData.energyToday;
+    _ctrl.getItem(_itemEnergyToday)?.numericValue ??
+    _meters.fold(0.0, (sum, m) => sum + m.energyToday);
 
 double get _energyYesterday =>
-    _ctrl.getItem(_itemEnergyYesterday)?.numericValue ?? _energyData.energyYesterday;
+    _ctrl.getItem(_itemEnergyYesterday)?.numericValue ??
+    _meters.fold(0.0, (sum, m) => sum + m.energyYesterday);
 
-  @override
   @override
 void initState() {
   super.initState();
+  WidgetsBinding.instance.addObserver(this);
   _ctrl.addListener(_onControllerUpdate);
   // _ctrl.initialize() DIHAPUS — controller sudah diinisialisasi
   // dari login_page.dart via initializeWithConfig()/resetConnection()
@@ -92,21 +138,7 @@ void initState() {
   // override balik ke config lama/default.
   _loadWeather();
 
-  final mqtt = MqttService.instance;
-
-  _energyData    = mqtt.lastData;
-  _mqttConnected = mqtt.isConnected;
-
-  mqtt.connect();
-
-  _dataSub = mqtt.stream.listen((data) {
-    if (mounted) {
-      setState(() {
-        _energyData    = data;
-        _mqttConnected = mqtt.isConnected;
-      });
-    }
-  });
+  _startMeterService();
 
   // Aktifkan pemantau notifikasi sejak app dibuka
   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -117,6 +149,7 @@ void initState() {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ctrl.removeListener(_onControllerUpdate);
     _dataSub?.cancel();
     super.dispose();
@@ -132,6 +165,50 @@ void initState() {
   void _onControllerUpdate() {
     if (!mounted) return;
     setState(() {});
+  }
+
+  /// Nama Group lokasi ruangan terpilih ('' = All / tidak ketemu).
+  String get _selectedLocationName {
+    if (_selectedRoom == 0 || _selectedRoom >= _rooms.length) return '';
+    final selected = _rooms[_selectedRoom].toLowerCase();
+    final loc = _ctrl.locations.firstWhere(
+      (l) =>
+          (l['label'] as String? ?? '').toLowerCase() == selected ||
+          (l['name'] as String? ?? '').toLowerCase() == selected,
+      orElse: () => <String, dynamic>{},
+    );
+    return loc['name'] as String? ?? '';
+  }
+
+  bool _cameraInLocation(OHThing t, String locName) {
+    final names = _ctrl.getItemsForLocation(locName).map((i) => i.name).toSet();
+    return t.channels.any((c) => c.linkedItems.any(names.contains));
+  }
+
+  /// Kamera hanya untuk ruangan terpilih (All = semua).
+  List<OHThing> get _camerasForRoom {
+    final all = _ctrl.cameraThings;
+    if (_selectedRoom == 0 || _selectedRoom >= _rooms.length) return all;
+    final loc = _selectedLocationName;
+    if (loc.isEmpty) return [];
+    return all.where((t) => _cameraInLocation(t, loc)).toList();
+  }
+
+  /// Unit AC sesuai ruangan yang dipilih (sebelumnya tampil di semua ruangan).
+  List<OHAcUnit> get _visibleAcUnits {
+    final units = _ctrl.acUnits;
+    if (_selectedRoom == 0 || _selectedRoom >= _rooms.length) return units;
+    final selected = _rooms[_selectedRoom].toLowerCase();
+    final loc = _ctrl.locations.firstWhere(
+      (l) =>
+          (l['label'] as String? ?? '').toLowerCase() == selected ||
+          (l['name'] as String? ?? '').toLowerCase() == selected,
+      orElse: () => <String, dynamic>{},
+    );
+    final groupName = loc['name'] as String? ?? '';
+    if (groupName.isEmpty) return [];
+    final names = _ctrl.getItemsForLocation(groupName).map((i) => i.name).toSet();
+    return units.where((u) => names.contains(u.powerItem)).toList();
   }
 
   bool _isSupportedItem(OpenHABItem i) =>
@@ -163,7 +240,7 @@ void initState() {
     final all = _ctrl.items
         .where((i) => _isSupportedItem(i) && !acNames.contains(i.name))
         .toList();
-    if (_selectedRoom == 0) return all;
+    if (_selectedRoom == 0 || _selectedRoom >= _rooms.length) return all;
 
     final selectedLabel = _rooms[_selectedRoom];
 
@@ -212,7 +289,10 @@ Widget build(BuildContext context) {
         Expanded(
           child: SafeArea(
             bottom: false,
+            child: RefreshIndicator(
+            onRefresh: _refreshAll,
             child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: EdgeInsets.symmetric(
                   horizontal: ResponsiveUtils.horizontalPadding(context)),
               child: ResponsiveUtils.constrainWidth(context, Column(
@@ -229,12 +309,12 @@ Widget build(BuildContext context) {
                   const SizedBox(height: 12),
                   _buildDevicesHeader(context),
                   const SizedBox(height: 8),
-                  ..._ctrl.acUnits.expand((unit) => [
+                  ..._visibleAcUnits.expand((unit) => [
                         _buildAcSummaryCard(context, unit),
                         const SizedBox(height: 12),
                       ]),
                   _buildDeviceGrid(context),
-                  if (_ctrl.hasCameraThings) ...[
+                  if (_camerasForRoom.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     _buildCameraSection(context),
                   ],
@@ -243,6 +323,7 @@ Widget build(BuildContext context) {
                   const SizedBox(height: 16),
                 ],
               )),
+            ),
             ),
           ),
         ),
@@ -350,15 +431,15 @@ Widget build(BuildContext context) {
         ),
         const SizedBox(width: 4),
         Tooltip(
-          message: _mqttConnected
-              ? 'MQTT Connected · Device: ${_energyData.deviceOnline ? "Online" : "Offline"}'
-              : 'MQTT Disconnected',
+          message: _deviceOnline
+              ? 'Power meter Online'
+              : 'Power meter Offline',
           child: Container(
             width: 10,
             height: 10,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: _mqttConnected ? Colors.green : Colors.orange,
+              color: _deviceOnline ? Colors.green : Colors.orange,
               border: Border.all(color: borderColor, width: 1.5),
             ),
           ),
@@ -566,7 +647,7 @@ Widget build(BuildContext context) {
       children: [
         GestureDetector(
           onTap: () async {
-            final result = await Navigator.push(
+            await Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const RoomsManagementPage()),
             );
@@ -800,13 +881,13 @@ Widget build(BuildContext context) {
                         children: [
                           _buildMiniStat(
                             icon: FontAwesomeIcons.bolt,
-                            value: '${_energyData.volt.toStringAsFixed(0)} V',
+                            value: '${_volt.toStringAsFixed(0)} V',
                             color: const Color(0xFFFFCC00),
                           ),
                           const SizedBox(width: 12),
                           _buildMiniStat(
                             icon: FontAwesomeIcons.plug,
-                            value: '${_energyData.powerKw.toStringAsFixed(2)} kW',
+                            value: '${_powerKw.toStringAsFixed(2)} kW',
                             color: const Color(0xFFFF6B35),
                           ),
                         ],
@@ -840,7 +921,7 @@ Widget build(BuildContext context) {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: _energyData.deviceOnline
+                color: _deviceOnline
                     ? const Color(0xFF34C759).withValues(alpha: 0.15)
                     : Colors.grey.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
@@ -853,19 +934,19 @@ Widget build(BuildContext context) {
                     height: 6,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: _energyData.deviceOnline
+                      color: _deviceOnline
                           ? const Color(0xFF34C759)
                           : Colors.grey,
                     ),
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    _energyData.deviceOnline ? 'Online' : 'Offline',
+                    _deviceOnline ? 'Online' : 'Offline',
                     style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 9,
                       fontWeight: FontWeight.w600,
-                      color: _energyData.deviceOnline
+                      color: _deviceOnline
                           ? const Color(0xFF34C759)
                           : Colors.grey,
                     ),
@@ -1100,10 +1181,7 @@ Widget build(BuildContext context) {
         builder: (_, scrollController) => ListenableBuilder(
           listenable: _ctrl,
           builder: (ctx, __) {
-            final acNames = _acItemNames;
-            final items = _ctrl.items.where((i) =>
-                _isSupportedItem(i) &&
-                !acNames.contains(i.name) &&
+            final items = _filteredItems.where((i) =>
                 (i.roomGuess.isNotEmpty ? i.roomGuess : 'Lainnya') == key).toList();
             final active = items.where(_itemIsActive).length;
 
@@ -1167,12 +1245,11 @@ Widget build(BuildContext context) {
       ],
       if (alarms.isNotEmpty) ...[
         const SizedBox(height: 16),
-        Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF27272A) : Colors.white,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Theme(
+        Material(
+        color: isDark ? const Color(0xFF27272A) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
               tilePadding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1259,12 +1336,11 @@ Widget build(BuildContext context) {
   Widget _buildTechInfo(BuildContext context, List<OpenHABItem> items) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted = isDark ? Colors.white60 : const Color(0xFF71717A);
-    return Container(
-      decoration: BoxDecoration(
+    return Material(
         color: isDark ? const Color(0xFF27272A) : Colors.white,
         borderRadius: BorderRadius.circular(20),
-      ),
-      child: Theme(
+        clipBehavior: Clip.antiAlias,
+        child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           tilePadding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1707,7 +1783,8 @@ Widget build(BuildContext context) {
   /// aslinya (di sini: server file milik binding IP Camera).
   Widget _buildCameraSection(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cameras = _ctrl.cameraThings;
+    final cameras = _camerasForRoom;
+    if (cameras.isEmpty) return const SizedBox.shrink();
 
     // Grup diambil dari field "location" Thing (diisi lewat openHAB UI,
     // sama seperti field yang dipakai openHAB sendiri buat kelompokin
@@ -1722,7 +1799,7 @@ Widget build(BuildContext context) {
       _selectedCameraGroup = 'Semua';
     }
 
-    final visibleCameras = _selectedCameraGroup == 'Semua'
+    final visibleCameras = (_selectedRoom != 0 || _selectedCameraGroup == 'Semua')
         ? cameras
         : cameras.where((t) => _cameraGroupLabel(t) == _selectedCameraGroup).toList();
 
@@ -1738,13 +1815,14 @@ Widget build(BuildContext context) {
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
                     color: isDark ? Colors.white : const Color(0xFF18181B))),
-            if (groups.length > 1) _buildCameraGroupChip(groups),
+            if (_selectedRoom == 0 && groups.length > 1)
+              _buildCameraGroupChip(groups),
           ],
         ),
         const SizedBox(height: 8),
         ...visibleCameras.map((thing) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _CameraThingCard(thing: thing, ctrl: _ctrl),
+              child: CameraThingCard(thing: thing, ctrl: _ctrl),
             )),
       ],
     );
@@ -2063,9 +2141,7 @@ Widget build(BuildContext context) {
                                 color: Color(0xFFF5F5F5))),
                         const SizedBox(height: 4),
                         Text(
-                          'Freq: ${_energyData.freq.toStringAsFixed(1)} Hz · '
-                          'Yesterday: ${_energyYesterday.toStringAsFixed(2)} kWh · '
-                          'Status: ${_energyData.status}',
+                          'Yesterday: ${_energyYesterday.toStringAsFixed(2)} kWh',
                           style: const TextStyle(
                               fontFamily: 'Inter',
                               fontWeight: FontWeight.w400,
@@ -3262,79 +3338,6 @@ class _RollerButton extends StatelessWidget {
   }
 }
 
-/// Kartu kamera untuk Thing hasil auto-discovery (binding IP Camera) —
-/// gaya sama persis dengan kartu Video openHAB: kartu gelap, label kiri
-/// atas, tombol play bulat di tengah. Sumbernya Thing + URL yang
-/// dikonstruksi langsung, BUKAN dari state Item manapun.
-class _CameraThingCard extends StatelessWidget {
-  final OHThing thing;
-  final OpenHABController ctrl;
-  const _CameraThingCard({required this.thing, required this.ctrl});
-
-  @override
-  Widget build(BuildContext context) {
-    final label = thing.label.isNotEmpty ? thing.label : thing.uid;
-    final isOnline = thing.isOnline;
-    return GestureDetector(
-      onTap: () => showDialog(
-        context: context,
-        builder: (_) => _VideoPlayerDialog(
-          label: label,
-          videoUrl: ctrl.cameraHlsUrl(thing),
-          onBeforePlay: () => ctrl.startCameraStream(thing),
-          httpHeaders: ctrl.authHeaders,
-        ),
-      ),
-      child: Container(
-        width: double.infinity,
-        height: 160,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: const Color(0xFF0A0A0A),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              left: 14, top: 12,
-              child: Text(label,
-                  style: const TextStyle(
-                      fontFamily: 'Inter',
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                      color: Colors.white)),
-            ),
-            if (!isOnline)
-              Positioned(
-                right: 12, top: 12,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.85),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text('Offline',
-                      style: TextStyle(
-                          fontFamily: 'Inter', fontSize: 10,
-                          fontWeight: FontWeight.w700, color: Colors.white)),
-                ),
-              ),
-            Center(
-              child: Container(
-                width: 48, height: 48,
-                decoration: const BoxDecoration(
-                    color: Color(0xFFE4E4E7), shape: BoxShape.circle),
-                child: const Icon(Icons.play_arrow_rounded,
-                    color: Colors.black, size: 26),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Dialog kamera bergaya widget Video openHAB — kartu gelap dengan label
 /// dan tombol play bulat di tengah. Belum ada integrasi video player
 /// sungguhan (butuh package terpisah — video_player/webview untuk
@@ -3443,12 +3446,12 @@ class _VideoPlayerDialog extends StatefulWidget {
   /// akan selalu kena 401 walau URL dan stream-nya sendiri sudah benar.
   final Map<String, String> httpHeaders;
   const _VideoPlayerDialog({
-    required this.label,
-    required this.videoUrl,
-    this.onBeforePlay,
-    this.httpHeaders = const {},
-  });
-
+  required this.label,
+  required this.videoUrl,
+  // ignore: unused_element_parameter
+  this.onBeforePlay,
+  this.httpHeaders = const {},
+});
   @override
   State<_VideoPlayerDialog> createState() => _VideoPlayerDialogState();
 }

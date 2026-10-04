@@ -108,7 +108,6 @@ class OHSchedule {
   static String _cronHuman(String cron) {
     final parts = cron.trim().split(RegExp(r'\s+'));
     if (parts.length < 6) return cron;
-    final ss  = parts[0];
     final mm  = parts[1];
     final hh  = parts[2];
     final day = parts[3];
@@ -1109,7 +1108,6 @@ class _AddSchedulePageState extends State<AddSchedulePage> {
   final _tagCtrl     = TextEditingController();
 
   String _triggerType = 'cron';
-  final String _cronPreset  = 'custom';
   final _cronCtrl     = TextEditingController(text: '0 0 8 * * ?');
   TimeOfDay _timeOfDay = const TimeOfDay(hour: 8, minute: 0);
   final Set<int> _selectedDays = {1, 2, 3, 4, 5};

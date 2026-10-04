@@ -25,7 +25,8 @@ class _AddThingPageState extends State<AddThingPage> {
 
   int _step = 0;
 
-  List<OHBinding> _bindings = [];
+  List<OHBinding> _bindings = []; // HANYA binding yang sudah terpasang
+  int _notInstalledCount = 0; // binding di katalog yang belum terpasang
   List<OHBinding> _filteredBindings = [];
   List<OHThingType> _thingTypes = [];
   List<OHThingType> _filteredThingTypes = [];
@@ -100,12 +101,24 @@ class _AddThingPageState extends State<AddThingPage> {
     await _loadBindings();
   }
 
-  Future<void> _loadBindings() async {
-    setState(() { _loadingBindings = true; _errorMsg = null; });
+  /// [silent] = true untuk pull-to-refresh: daftar lama tetap tampil selagi
+  /// memuat (tanpa spinner layar penuh).
+  Future<void> _loadBindings({bool silent = false}) async {
+    setState(() {
+      if (!silent) _loadingBindings = true;
+      _errorMsg = null;
+    });
     try {
-      final bindings = await _mgmt.getBindings();
+      // /rest/addons?type=binding mengembalikan SELURUH katalog (terpasang
+      // maupun belum). Add Thing hanya boleh menawarkan yang sudah terpasang
+      // — binding yang belum terpasang tidak punya thing type, jadi saat
+      // diklik hasilnya kosong. Yang belum terpasang dipisahkan ke katalog
+      // Add-on Store; di sini hanya dihitung untuk petunjuk.
+      final all = await _mgmt.getBindings();
+      final installed = all.where((b) => b.installed).toList();
       setState(() {
-        _bindings = bindings;
+        _bindings = installed;
+        _notInstalledCount = all.length - installed.length;
         _applyBindingFilter();
       });
     } catch (e) {
@@ -273,6 +286,7 @@ class _AddThingPageState extends State<AddThingPage> {
       );
 
       if (mounted) {
+        _ctrl.refresh(); // sinkronkan Things/Items/Locations di semua halaman
         _showSuccessSnack();
         await Future.delayed(const Duration(milliseconds: 600));
         if (mounted) Navigator.pop(context, true);
@@ -309,8 +323,9 @@ class _AddThingPageState extends State<AddThingPage> {
     }
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return WillPopScope(
-      onWillPop: () async { _goBack(); return false; },
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) { if (!didPop) _goBack(); },
       child: Scaffold(
         backgroundColor: isDark ? const Color(0xFF18181B) : const Color(0xFFF5F5F7),
         appBar: _buildAppBar(context),
@@ -487,11 +502,11 @@ class _AddThingPageState extends State<AddThingPage> {
           Icon(Icons.extension_off, size: 48,
               color: isDark ? Colors.white24 : Colors.grey.shade300),
           const SizedBox(height: 12),
-          Text('Tidak ada binding tersedia',
+          Text('Belum ada binding terpasang',
               style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700,
                   fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
           const SizedBox(height: 6),
-          Text('Install binding terlebih dahulu di openHAB dashboard.',
+          Text('Pasang binding lewat Add-on Store, lalu muat ulang daftar ini.',
               textAlign: TextAlign.center,
               style: TextStyle(fontFamily: 'Inter', fontSize: 13,
                   color: isDark ? Colors.white38 : Colors.grey.shade500)),
@@ -533,14 +548,38 @@ class _AddThingPageState extends State<AddThingPage> {
                   ]),
                 ),
               )
-            : ListView(
-                padding: EdgeInsets.fromLTRB(
-                    ResponsiveUtils.horizontalPadding(context), 12,
-                    ResponsiveUtils.horizontalPadding(context), 40),
-                children: _buildGroupedBindingList(context),
+            : RefreshIndicator(
+                // Tarik ke bawah = sinkron ulang dengan status instalasi openHAB
+                // (mis. setelah memasang / menghapus add-on).
+                onRefresh: () => _loadBindings(silent: true),
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(
+                      ResponsiveUtils.horizontalPadding(context), 12,
+                      ResponsiveUtils.horizontalPadding(context), 40),
+                  children: [
+                    ..._buildGroupedBindingList(context),
+                    _buildStoreHint(context, isDark),
+                  ],
+                ),
               ),
       ),
     ]);
+  }
+
+  Widget _buildStoreHint(BuildContext context, bool isDark) {
+    if (_notInstalledCount == 0) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 20, 8, 0),
+      child: Text(
+        '$_notInstalledCount binding lain belum terpasang sehingga tidak '
+        'ditampilkan di sini. Pasang lewat Add-on Store, lalu tarik ke bawah '
+        'untuk memperbarui daftar.',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontFamily: 'Inter', fontSize: 12,
+            color: isDark ? Colors.white38 : Colors.grey.shade500),
+      ),
+    );
   }
 
   /// Kelompokkan binding per kategori (heuristik, lihat
@@ -632,7 +671,7 @@ class _AddThingPageState extends State<AddThingPage> {
               );
               if (result == true && mounted) {
                 // Thing sudah dibuat lewat Discovery → tutup alur Add Thing manual.
-                Navigator.pop(context, true);
+                Navigator.pop(this.context, true);
               }
             },
             icon: const Icon(Icons.radar, size: 18, color: Colors.white),

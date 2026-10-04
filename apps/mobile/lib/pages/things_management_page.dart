@@ -8,6 +8,7 @@ import 'package:mobile/core/controllers/openhab_controller.dart';
 import 'package:mobile/pages/add_thing_page.dart';
 import 'package:mobile/pages/edit_thing_page.dart';
 import 'package:mobile/pages/discovery_page.dart';
+import 'package:mobile/pages/map_thing_to_room_page.dart'; // [MAPPING]
 import 'package:mobile/core/utils/responsive_utils.dart';
 import 'package:provider/provider.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -154,11 +155,15 @@ class _ThingsManagementPageState extends State<ThingsManagementPage>
                 color: isDark ? Colors.white : const Color(0xFF18181B)),
             tooltip: 'Tambah Thing',
             onPressed: () async {
+              final before = _allThings.map((t) => t.uid).toSet(); // [MAPPING]
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const AddThingPage()),
               );
-              if (result == true) await _loadThings();
+              if (result == true) {
+                await _loadThings();
+                await _offerMapping(before); // [MAPPING]
+              }
             },
           ),
         if (isAdmin)
@@ -168,11 +173,15 @@ class _ThingsManagementPageState extends State<ThingsManagementPage>
                 color: isDark ? Colors.white : const Color(0xFF18181B)),
             tooltip: 'Discovery',
             onPressed: () async {
+              final before = _allThings.map((t) => t.uid).toSet(); // [MAPPING]
               final result = await Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const DiscoveryPage()),
               );
-              if (result == true) await _loadThings();
+              if (result == true) {
+                await _loadThings();
+                await _offerMapping(before); // [MAPPING]
+              }
             },
           ),
         IconButton(
@@ -488,6 +497,40 @@ class _ThingsManagementPageState extends State<ThingsManagementPage>
     );
   }
 
+  // [MAPPING] Setelah Thing baru ditambahkan, tawarkan langsung pasang ke ruangan.
+  Future<void> _offerMapping(Set<String> uidsBefore) async {
+    if (!mounted) return;
+    final added = _allThings.where((t) => !uidsBefore.contains(t.uid)).toList();
+    if (added.isEmpty) return;
+    final thing = added.first;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Thing ditambahkan'),
+        content: Text(
+            'Pasang "${thing.label.isNotEmpty ? thing.label : thing.uid}" ke '
+            'ruangan sekarang agar tampil dan bisa dikontrol di Floorplan?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Nanti')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Pasang Sekarang')),
+        ],
+      ),
+    );
+    if (go == true && mounted) await _openMapping(thing);
+  }
+
+  Future<void> _openMapping(OHThing thing) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => MapThingToRoomPage(thing: thing)),
+    );
+    if (mounted) await _loadThings(); // status link channel ikut ter-update
+  }
+
   void _showThingDetail(OHThing thing) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
@@ -497,6 +540,10 @@ class _ThingsManagementPageState extends State<ThingsManagementPage>
       builder: (_) => _ThingDetailSheet(
         thing: thing,
         isDark: isDark,
+        onMap: () {
+          Navigator.pop(context); // tutup bottom sheet
+          _openMapping(thing); // [MAPPING]
+        },
         onEdit: () async {
           Navigator.pop(context); // tutup bottom sheet dulu
           final result = await Navigator.push(
@@ -735,11 +782,13 @@ class _ThingDetailSheet extends StatelessWidget {
   final OHThing thing;
   final bool isDark;
   final VoidCallback onEdit;
+  final VoidCallback onMap; // [MAPPING]
 
   const _ThingDetailSheet({
     required this.thing,
     required this.isDark,
     required this.onEdit,
+    required this.onMap, // [MAPPING]
   });
 
   Color get _statusColor {
@@ -927,6 +976,32 @@ class _ThingDetailSheet extends StatelessWidget {
         ],
 
         const SizedBox(height: 20),
+        // [MAPPING] Tombol utama: pasang Thing ke ruangan/floorplan
+        if (thing.channels.any((c) => c.itemType.isNotEmpty))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
+            child: SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: onMap,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  elevation: 0,
+                ),
+                icon: const Icon(Icons.meeting_room_outlined,
+                    size: 18, color: Colors.white),
+                label: const Text('Pasang ke Ruangan',
+                    style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: Colors.white)),
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: SizedBox(
