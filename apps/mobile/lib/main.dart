@@ -14,6 +14,7 @@ import 'firebase_options.dart';
 import 'pages/login_page.dart';
 import 'pages/otp_page.dart';
 import 'pages/signup_page.dart';
+import 'package:mobile/core/services/app_notification_service.dart';
 
 final GoRouter _router = GoRouter(
   initialLocation: '/login',
@@ -87,6 +88,7 @@ class MyApp extends StatelessWidget {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: themeProvider.themeMode,
+          scaffoldMessengerKey: AppNotificationService.messengerKey,
           routerConfig: _router,
         );
       },

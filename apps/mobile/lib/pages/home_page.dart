@@ -22,6 +22,7 @@ import '../core/models/openhab_item.dart';
 import 'package:mobile/core/services/openhab_management_service.dart' show OHThing;
 import 'package:mobile/core/services/mqtt_service.dart';
 import 'package:mobile/core/utils/responsive_utils.dart';
+import 'package:mobile/core/services/app_notification_service.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -81,31 +82,38 @@ double get _energyYesterday =>
     _ctrl.getItem(_itemEnergyYesterday)?.numericValue ?? _energyData.energyYesterday;
 
   @override
-  void initState() {
-    super.initState();
-    _ctrl.addListener(_onControllerUpdate);
-    // _ctrl.initialize() DIHAPUS — controller sudah diinisialisasi
-    // dari login_page.dart via initializeWithConfig()/resetConnection()
-    // sesuai akun yang login. Memanggilnya lagi di sini akan
-    // override balik ke config lama/default.
-    _loadWeather();
+  @override
+void initState() {
+  super.initState();
+  _ctrl.addListener(_onControllerUpdate);
+  // _ctrl.initialize() DIHAPUS — controller sudah diinisialisasi
+  // dari login_page.dart via initializeWithConfig()/resetConnection()
+  // sesuai akun yang login. Memanggilnya lagi di sini akan
+  // override balik ke config lama/default.
+  _loadWeather();
 
-    final mqtt = MqttService.instance;
+  final mqtt = MqttService.instance;
 
-    _energyData    = mqtt.lastData;
-    _mqttConnected = mqtt.isConnected;
+  _energyData    = mqtt.lastData;
+  _mqttConnected = mqtt.isConnected;
 
-    mqtt.connect();
+  mqtt.connect();
 
-    _dataSub = mqtt.stream.listen((data) {
-      if (mounted) {
-        setState(() {
-          _energyData    = data;
-          _mqttConnected = mqtt.isConnected;
-        });
-      }
-    });
-  }
+  _dataSub = mqtt.stream.listen((data) {
+    if (mounted) {
+      setState(() {
+        _energyData    = data;
+        _mqttConnected = mqtt.isConnected;
+      });
+    }
+  });
+
+  // Aktifkan pemantau notifikasi sejak app dibuka
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) AppNotificationService.instance.startFromContext(context);
+  });
+
+}
 
   @override
   void dispose() {

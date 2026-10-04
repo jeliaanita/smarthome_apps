@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -7,50 +5,11 @@ import 'package:http/http.dart' as http;
 import 'package:mobile/pages/energy_page.dart';
 import 'package:mobile/pages/floor_plan_page.dart';
 import 'package:mobile/pages/settings_page.dart';
+import 'package:mobile/core/services/app_notification_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_typography.dart';
 import '../../../../core/providers/installation_provider.dart';
 import '../../../../core/controllers/openhab_controller.dart';
-
-enum _NotifType { inbox, thingIssue, stateChange, info }
-
-class _NotifItem {
-  final String id;
-  final _NotifType type;
-  final String title;
-  final String subtitle;
-  final DateTime time;
-  bool isRead;
-
-  final String? thingUID;
-
-  _NotifItem({
-    required this.id,
-    required this.type,
-    required this.title,
-    required this.subtitle,
-    required this.time,
-    this.thingUID,
-  }) : isRead = false;
-
-  IconData get icon {
-    switch (type) {
-      case _NotifType.inbox:       return Icons.add_circle_outline_rounded;
-      case _NotifType.thingIssue:  return Icons.warning_amber_rounded;
-      case _NotifType.stateChange: return Icons.bolt_rounded;
-      case _NotifType.info:        return Icons.info_outline_rounded;
-    }
-  }
-
-  Color get iconBg {
-    switch (type) {
-      case _NotifType.inbox:       return const Color(0xFF3B82F6);
-      case _NotifType.thingIssue:  return const Color(0xFFEF4444);
-      case _NotifType.stateChange: return const Color(0xFFFFA500);
-      case _NotifType.info:        return const Color(0xFF34A853);
-    }
-  }
-}
 
 class NotificationPage extends StatefulWidget {
   const NotificationPage({super.key});
@@ -60,24 +19,33 @@ class NotificationPage extends StatefulWidget {
 }
 
 class _NotificationPageState extends State<NotificationPage> {
-  final _ctrl    = OpenHABController.instance;
-  final _notifs  = <_NotifItem>[];
-  final _seenIds = <String>{};
+  final _ctrl = OpenHABController.instance;
+  final _svc  = AppNotificationService.instance;
+
+  List<AppNotif> get _notifs => _svc.items;
+
   bool _isSelectionMode = false;
   final _selectedIds    = <String>{};
 
-  bool    _isLoading  = true;
-  bool    _isDeleting = false;
-  String? _error;
-
-  StreamSubscription<String>? _sseSub;
-  http.Client? _sseClient;
-  Timer?       _pollTimer;
+  late bool _isLoading = !_svc.ready;
+  bool      _isDeleting = false;
+  String?   _error;
 
   @override
   void initState() {
     super.initState();
+    _svc.addListener(_onSvcChanged);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    _svc.removeListener(_onSvcChanged);
+    super.dispose();
+  }
+
+  void _onSvcChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _bootstrap() async {
@@ -88,230 +56,13 @@ class _NotificationPageState extends State<NotificationPage> {
       });
       return;
     }
-    await _fetchInbox();
-    await _fetchThingIssues();
-    _startSSE();
-    _pollTimer = Timer.periodic(
-      const Duration(seconds: 60),
-      (_) async {
-        await _fetchInbox();
-        await _fetchThingIssues();
-      },
-    );
-    if (mounted) setState(() => _isLoading = false);
+    await _svc.startFromContext(context);
+    if (mounted) setState(() { _isLoading = false; _error = null; });
   }
 
-  @override
-  void dispose() {
-    _sseSub?.cancel();
-    _sseClient?.close();
-    _pollTimer?.cancel();
-    super.dispose();
-  }
+  Future<Map<String, String>> _headers() async => AppNotificationService
+      .buildHeaders(context.read<InstallationProvider>().config);
 
-  Future<Map<String, String>> _headers() async {
-    final config = context.read<InstallationProvider>().config;
-    final token    = config?.apiToken;
-    final username = config?.username;
-    final password = config?.password;
-
-    final h = <String, String>{'Accept': 'application/json'};
-    if (token != null && token.isNotEmpty) {
-      h['Authorization'] = 'Bearer $token';
-    } else if (username != null && password != null) {
-      final enc = base64Encode(utf8.encode('$username:$password'));
-      h['Authorization'] = 'Basic $enc';
-    }
-    return h;
-  }
-
-  Future<void> _fetchInbox() async {
-    try {
-      final uri = Uri.parse('${_ctrl.serverUrl}/rest/inbox');
-      final res = await http
-          .get(uri, headers: await _headers())
-          .timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return;
-
-      final list = jsonDecode(res.body) as List;
-      for (final e in list) {
-        final thingUID = e['thingUID'] as String? ?? '';
-        final id       = 'inbox_$thingUID';
-        final label    = e['label'] as String? ?? thingUID;
-        final flag     = e['flag']  as String? ?? '';
-
-        if (_seenIds.contains(id)) continue;
-        _seenIds.add(id);
-        _addNotif(_NotifItem(
-          id:       id,
-          type:     _NotifType.inbox,
-          title:    'Perangkat Baru Terdeteksi',
-          subtitle: '$label${flag.isNotEmpty ? ' · $flag' : ''}',
-          time:     DateTime.now(),
-          thingUID: thingUID,
-        ));
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _fetchThingIssues() async {
-    try {
-      final uri = Uri.parse('${_ctrl.serverUrl}/rest/things?summary=true');
-      final res = await http
-          .get(uri, headers: await _headers())
-          .timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) return;
-
-      final list = jsonDecode(res.body) as List;
-      for (final e in list) {
-        final status = (e['statusInfo']?['status'] as String? ?? '').toUpperCase();
-        if (status != 'OFFLINE' && status != 'ERROR') continue;
-
-        final uid    = e['UID']   as String? ?? '';
-        final label  = e['label'] as String? ?? uid;
-        final detail = e['statusInfo']?['description'] as String? ?? status;
-        final id     = 'thing_${uid}_$status';
-
-        if (_seenIds.contains(id)) continue;
-        _seenIds.add(id);
-        _addNotif(_NotifItem(
-          id:       id,
-          type:     _NotifType.thingIssue,
-          title:    status == 'OFFLINE' ? 'Perangkat Offline' : 'Error Perangkat',
-          subtitle: '$label — $detail',
-          time:     DateTime.now(),
-        ));
-      }
-    } catch (_) {}
-  }
-
-  void _startSSE() {
-    _sseClient = http.Client();
-    _headers().then((headers) async {
-      final uri = Uri.parse(
-        '${_ctrl.serverUrl}/rest/events'
-        '?topics=openhab/items/*/statechanged'
-        ',openhab/things/*/statuschanged'
-        ',openhab/inbox/*',
-      );
-      try {
-        final req  = http.Request('GET', uri)..headers.addAll(headers);
-        final resp = await _sseClient!.send(req);
-        _sseSub = resp.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen(_handleSSELine, onError: (_) => _reconnectSSE());
-      } catch (_) {
-        _reconnectSSE();
-      }
-    });
-  }
-
-  void _reconnectSSE() {
-    _sseSub?.cancel();
-    _sseClient?.close();
-    Future.delayed(const Duration(seconds: 10), () {
-      if (mounted) _startSSE();
-    });
-  }
-
-  String _sseDataBuffer = '';
-  void _handleSSELine(String line) {
-    if (line.startsWith('data:')) {
-      _sseDataBuffer += line.substring(5).trim();
-    } else if (line.isEmpty && _sseDataBuffer.isNotEmpty) {
-      _processSSEEvent(_sseDataBuffer);
-      _sseDataBuffer = '';
-    }
-  }
-
-  void _processSSEEvent(String raw) {
-    try {
-      final json  = jsonDecode(raw) as Map<String, dynamic>;
-      final topic = json['topic'] as String? ?? '';
-      final type  = json['type']  as String? ?? '';
-
-      if (type == 'ItemStateChangedEvent') {
-        final payload = jsonDecode(json['payload'] as String) as Map;
-        final parts   = topic.split('/');
-        final name    = parts.length > 2 ? parts[2] : 'Item';
-        final value   = payload['value'] as String? ?? '';
-        if (!_isInterestingState(value)) return;
-        final id = 'sse_${name}_$value';
-        if (_seenIds.contains(id)) return;
-        _seenIds.add(id);
-        if (_seenIds.length > 500) _seenIds.clear();
-        _addNotif(_NotifItem(
-          id:       id,
-          type:     _NotifType.stateChange,
-          title:    _labelFromItemName(name),
-          subtitle: _describeStateChange(name, value),
-          time:     DateTime.now(),
-        ));
-      } else if (type == 'ThingStatusInfoChangedEvent') {
-        final payload   = jsonDecode(json['payload'] as String) as List;
-        final newStatus = (payload.isNotEmpty
-            ? payload[0]['status'] as String? ?? '' : '').toUpperCase();
-        if (newStatus != 'OFFLINE' && newStatus != 'ERROR') return;
-        final parts = topic.split('/');
-        final uid   = parts.length > 2 ? parts[2] : 'Thing';
-        final id    = 'sse_thing_${uid}_$newStatus';
-        if (_seenIds.contains(id)) return;
-        _seenIds.add(id);
-        _addNotif(_NotifItem(
-          id:       id,
-          type:     _NotifType.thingIssue,
-          title:    newStatus == 'OFFLINE' ? 'Perangkat Offline' : 'Error Perangkat',
-          subtitle: '$uid berubah ke status $newStatus',
-          time:     DateTime.now(),
-        ));
-      } else if (type == 'InboxAddedEvent') {
-        final payload  = jsonDecode(json['payload'] as String) as Map;
-        final thingUID = payload['thingUID'] as String? ?? '';
-        final label    = payload['label']    as String? ?? thingUID;
-        final id       = 'sse_inbox_$thingUID';
-        if (_seenIds.contains(id)) return;
-        _seenIds.add(id);
-        _addNotif(_NotifItem(
-          id:       id,
-          type:     _NotifType.inbox,
-          title:    'Perangkat Baru Terdeteksi',
-          subtitle: label,
-          time:     DateTime.now(),
-          thingUID: thingUID,
-        ));
-      }
-    } catch (_) {}
-  }
-
-  bool _isInterestingState(String value) {
-    final v = value.toUpperCase();
-    if (v == 'ON' || v == 'OFF' || v == 'OPEN' || v == 'CLOSED') return true;
-    return double.tryParse(value) != null;
-  }
-
-  String _labelFromItemName(String name) => name
-      .replaceAll('_', ' ')
-      .replaceAllMapped(RegExp(r'([A-Z])'), (m) => ' ${m[0]}')
-      .trim();
-
-  String _describeStateChange(String name, String value) {
-    final v     = value.toUpperCase();
-    final label = _labelFromItemName(name);
-    if (v == 'ON')     return '$label telah dinyalakan.';
-    if (v == 'OFF')    return '$label telah dimatikan.';
-    if (v == 'OPEN')   return '$label terbuka.';
-    if (v == 'CLOSED') return '$label tertutup.';
-    return '$label berubah ke $value.';
-  }
-
-  void _addNotif(_NotifItem item) {
-    if (!mounted) return;
-    setState(() {
-      _notifs.insert(0, item);
-      if (_notifs.length > 100) _notifs.removeLast();
-    });
-  }
   Future<bool> _ignoreInboxItem(String thingUID) async {
     if (thingUID.isEmpty) return false;
     try {
@@ -382,8 +133,8 @@ class _NotificationPageState extends State<NotificationPage> {
 
     final toDelete = _notifs.where((n) => _selectedIds.contains(n.id)).toList();
 
-    final inboxItems    = toDelete.where((n) => n.type == _NotifType.inbox).toList();
-    final nonInboxItems = toDelete.where((n) => n.type != _NotifType.inbox).toList();
+    final inboxItems    = toDelete.where((n) => n.type == AppNotifType.inbox).toList();
+    final nonInboxItems = toDelete.where((n) => n.type != AppNotifType.inbox).toList();
 
     int ohSuccess = 0;
     int ohFailed  = 0;
@@ -400,13 +151,8 @@ class _NotificationPageState extends State<NotificationPage> {
       }
     }
 
-    final failedInboxIds = <String>{};
-    for (int i = 0; i < inboxItems.length; i++) {
-    }
-
     setState(() {
-      _notifs.removeWhere((n) => _selectedIds.contains(n.id));
-      _seenIds.removeAll(_selectedIds);
+      _svc.removeByIds(Set<String>.of(_selectedIds));
       _selectedIds.clear();
       _isSelectionMode = false;
       _isDeleting      = false;
@@ -464,7 +210,7 @@ class _NotificationPageState extends State<NotificationPage> {
     final selectedItems =
         _notifs.where((n) => _selectedIds.contains(n.id)).toList();
     final hasInbox =
-        selectedItems.any((n) => n.type == _NotifType.inbox);
+        selectedItems.any((n) => n.type == AppNotifType.inbox);
 
     return showDialog<bool>(
       context: context,
@@ -624,7 +370,7 @@ class _NotificationPageState extends State<NotificationPage> {
               ),
             ),
             _buildMenuTile(
-              icon: FontAwesomeIcons.checkSquare,
+              icon: FontAwesomeIcons.squareCheck,
               iconColor: const Color(0xFF3B82F6),
               label: 'Pilih Notifikasi',
               isDark: isDark,
@@ -699,12 +445,12 @@ class _NotificationPageState extends State<NotificationPage> {
     );
   }
 
-  Map<String, List<_NotifItem>> _grouped() {
+  Map<String, List<AppNotif>> _grouped() {
     final now   = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final week  = today.subtract(const Duration(days: 7));
 
-    final groups = <String, List<_NotifItem>>{
+    final groups = <String, List<AppNotif>>{
       'BARU': [], 'HARI INI': [], 'MINGGU INI': [], 'LEBIH LAMA': [],
     };
 
@@ -725,13 +471,7 @@ class _NotificationPageState extends State<NotificationPage> {
     return groups;
   }
 
-  void _markAllRead() {
-    setState(() {
-      for (final n in _notifs) {
-        n.isRead = true;
-      }
-    });
-  }
+  void _markAllRead() => _svc.markAllRead();
 
   int get _unreadCount => _notifs.where((n) => !n.isRead).length;
 
@@ -798,7 +538,7 @@ class _NotificationPageState extends State<NotificationPage> {
     final selectedItems =
         _notifs.where((n) => _selectedIds.contains(n.id)).toList();
     final inboxCount =
-        selectedItems.where((n) => n.type == _NotifType.inbox).length;
+        selectedItems.where((n) => n.type == AppNotifType.inbox).length;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -1212,7 +952,7 @@ class _NotificationPageState extends State<NotificationPage> {
     );
   }
 
-  Widget _buildNotifRow(_NotifItem item, bool isDark) {
+  Widget _buildNotifRow(AppNotif item, bool isDark) {
     final isSelected = _selectedIds.contains(item.id);
 
     return GestureDetector(
@@ -1220,7 +960,7 @@ class _NotificationPageState extends State<NotificationPage> {
         if (_isSelectionMode) {
           _toggleSelect(item.id);
         } else {
-          setState(() => item.isRead = true);
+          _svc.markRead(item);
         }
       },
       onLongPress: () {
@@ -1317,7 +1057,7 @@ class _NotificationPageState extends State<NotificationPage> {
                               shape: BoxShape.circle),
                         ),
                       if (!_isSelectionMode &&
-                          item.type == _NotifType.inbox)
+                          item.type == AppNotifType.inbox)
                         Container(
                           margin: const EdgeInsets.only(left: 6),
                           padding: const EdgeInsets.symmetric(
